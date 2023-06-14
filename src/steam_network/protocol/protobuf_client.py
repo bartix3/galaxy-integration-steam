@@ -13,16 +13,13 @@ import base64
 import vdf
 
 from websockets.client import WebSocketClientProtocol
-from betterproto import Message
-
-from steam_network.protocol.protobuf_socket_handler import ProtocolParser
 
 from .consts import EMsg, EResult, EAccountType, EFriendRelationship, EPersonaState
-from .messages.steammessages_base import (
+from .messages.steammessages_base_pb2 import (
     CMsgMulti,
     CMsgProtoBufHeader,
 )
-from .messages.steammessages_clientserver_login import (
+from .messages.steammessages_clientserver_login_pb2 import (
     CMsgClientAccountInfo,
     CMsgClientHeartBeat,
     CMsgClientHello,
@@ -31,7 +28,7 @@ from .messages.steammessages_clientserver_login import (
     CMsgClientLogon,
     CMsgClientLogonResponse,
 )
-from .messages.steammessages_auth import (
+from .messages.steammessages_auth_pb2 import (
     CAuthentication_BeginAuthSessionViaCredentials_Request,
     CAuthentication_BeginAuthSessionViaCredentials_Response,
     CAuthentication_GetPasswordRSAPublicKey_Request,
@@ -42,52 +39,46 @@ from .messages.steammessages_auth import (
     CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response,
     EAuthSessionGuardType,
     EAuthTokenPlatformType,
-    ESessionPersistence,
 )
-from .messages.steammessages_player import (
+from .messages.steammessages_player_pb2 import (
     CPlayer_GetLastPlayedTimes_Request,
     CPlayer_GetLastPlayedTimes_Response,
 )
-from .messages.steammessages_clientserver_friends import (
+from .messages.steammessages_clientserver_friends_pb2 import (
     CMsgClientChangeStatus,
     CMsgClientFriendsList,
     CMsgClientPersonaState,
     CMsgClientPlayerNicknameList,
     CMsgClientRequestFriendData,
 )
-from .messages.steammessages_clientserver import (
+from .messages.steammessages_clientserver_pb2 import (
     CMsgClientLicenseList,
-    CMsgClientLicenseListLicense
 )
-from .messages.steammessages_chat import (
+from .messages.steammessages_chat_pb2 import (
     CChat_RequestFriendPersonaStates_Request,
 )
-from .messages.steammessages_clientserver_2 import (
+from .messages.steammessages_clientserver_2_pb2 import (
     CMsgClientUpdateMachineAuthResponse,
 )
-from .messages.steammessages_clientserver_userstats import (
+from .messages.steammessages_clientserver_userstats_pb2 import (
     CMsgClientGetUserStats,
     CMsgClientGetUserStatsResponse,
 )
-from .messages.steammessages_clientserver_appinfo import (
+from .messages.steammessages_clientserver_appinfo_pb2 import (
     CMsgClientPICSProductInfoRequest,
-    CMsgClientPICSProductInfoRequestPackageInfo,
     CMsgClientPICSProductInfoResponse,
-    CMsgClientPICSProductInfoResponsePackageInfo,
-    CMsgClientPICSProductInfoResponseAppInfo,
 )
-from .messages.service_cloudconfigstore import (
+from .messages.service_cloudconfigstore_pb2 import (
     CCloudConfigStore_Download_Request,
     CCloudConfigStore_Download_Response,
     CCloudConfigStore_NamespaceVersion,
 )
-from .messages.steammessages_webui_friends import (
+from .messages.steammessages_webui_friends_pb2 import (
     CCommunity_GetAppRichPresenceLocalization_Request,
     CCommunity_GetAppRichPresenceLocalization_Response,
 )
 
 from .steam_types import SteamId, ProtoUserInfo
-from .task_parallelizer import parallel_map_async
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -102,8 +93,9 @@ LOGIN_CREDENTIALS = "Authentication.BeginAuthSessionViaCredentials#1"
 UPDATE_TWO_FACTOR = "Authentication.UpdateAuthSessionWithSteamGuardCode#1"
 CHECK_AUTHENTICATION_STATUS = "Authentication.PollAuthSessionStatus#1"
 
+
 class SteamLicense(NamedTuple):
-    license_data: CMsgClientLicenseListLicense  # type: ignore[name-defined]
+    license: CMsgClientLicenseList.License  # type: ignore[name-defined]
     shared: bool
 
 
@@ -125,14 +117,14 @@ class ProtobufClient:
         self.log_on_token_handler:          Optional[Callable[[EResult, Optional[int], Optional[int]], Awaitable[None]]] = None
         self._heartbeat_task:               Optional[asyncio.Task] = None #keeps our connection alive, essentially, by pinging the steam server.
         self.log_off_handler:               Optional[Callable[[EResult], Awaitable[None]]] = None
-        #retrieve information
+        #retrive information
         self.relationship_handler:          Optional[Callable[[bool, Dict[int, EFriendRelationship]], Awaitable[None]]] = None
         self.user_info_handler:             Optional[Callable[[int, ProtoUserInfo], Awaitable[None]]] = None
         self.user_nicknames_handler:        Optional[Callable[[dict], Awaitable[None]]] = None
         self.license_import_handler:        Optional[Callable[[int], Awaitable[None]]] = None
-        self.app_info_handler:              Optional[Callable[[str, str, str, str, str], None]] = None
+        self.app_info_handler:              Optional[Callable] = None
         self.package_info_handler:          Optional[Callable[[], None]] = None
-        self.translations_handler:          Optional[Callable[[float, Any], Awaitable[None]]] = None
+        self.translations_handler:          Optional[Callable[[int, Any], Awaitable[None]]] = None
         self.stats_handler:                 Optional[Callable[[int, Any, Any], Awaitable[None]]] = None
         self.confirmed_steam_id:            Optional[int] = None #this should only be set when the steam id is confirmed. this occurs when we actually complete the login. before then, it will cause errors.
         self.times_handler:                 Optional[Callable[[int, int, int], Awaitable[None]]] = None
@@ -159,7 +151,7 @@ class ProtobufClient:
         jobs_to_process = 0
         while True:
             if jobs_to_process < 2:
-                for job in self.job_list[:1].copy():
+                for job in self.job_list[:2].copy():
                     logger.info(f"New job on list {job}")
                     jobs_to_process += 1
                     if job['job_name'] == "import_game_stats":
@@ -194,8 +186,7 @@ class ProtobufClient:
         await self._send(emsg, message, source_job_id=job_id, target_job_name= target_job_name)
 
     #new workflow:  say hello -> get rsa public key -> log on with password -> handle steam guard -> confirm login
-    #each is getting a dedicated function so i don't go insane.
-    #confirm login is the old log_on_token call.
+    #unlike how websocket client does this (currently), these functions are written separately for clarity and sanity.
 
     async def say_hello(self):
         """Say Hello to the server. Necessary before sending non-authed calls.
@@ -207,59 +198,74 @@ class ProtobufClient:
         await self._send(EMsg.ClientHello,message)
 
     #send the get rsa key request
-    #imho we should just do a send and receive back to back instead of this bouncing around, but whatever.
     async def get_rsa_public_key(self, account_name: str):
+        """ Send a request to steam's servers for them to generate a public key for the account name provided. 
+        
+        Each request generates a unique key for each login attempt, so this cannot be cached. It's also not vulnerable to replay attacks. 
+        """
         message = CAuthentication_GetPasswordRSAPublicKey_Request()
         message.account_name = account_name
         await self._send_service_method_with_name(message, GET_RSA_KEY) #parsed from SteamKit's gobbledygook
 
     #process the received the rsa key response. Because we will need all the information about this process, we send the entire message up the chain.
-    async def _process_rsa(self, result : EResult, body : bytes):
-        message = CAuthentication_GetPasswordRSAPublicKey_Response().parse(body)
+    async def _process_rsa(self, result, body):
+        """ Receive the response to the RSA request sent in get_rsa_public_key
+        
+        parses the message and retrieves the data from it, then sends this along to the handler so it can further process it.
+        """
+        message = CAuthentication_GetPasswordRSAPublicKey_Response()
+        message.ParseFromString(body)
         logger.info("Received RSA KEY")
-        #logger.info(pformat(message))
         if (self.rsa_handler is not None):
             await self.rsa_handler(result, int(message.publickey_mod, 16), int(message.publickey_exp, 16), message.timestamp)
         else:
             logger.warning("NO RSA HANDLER SET!")
 
-    async def log_on_password(self, account_name:str, enciphered_password: bytes, timestamp: int, os_value: int):
-        friendly_name: str = sock.gethostname() + " (GOG Galaxy)"
+    async def log_on_password(self, account_name, enciphered_password: str, timestamp: int, os_value):
+        """Send a request to begin authentication using a user name and enciphered password. 
 
-        #device details is readonly. So we can't do this the easy way.
-        #device_details = CAuthentication_DeviceDetails()
-        #device_details.device_friendly_name =
-        #device_details.os_type = os_value if os_value >= 0 else 0
-        #device_details.platform_type= EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
+
+        """
+        friendly_name: str = sock.gethostname() + " (GOG Galaxy)"
 
         message = CAuthentication_BeginAuthSessionViaCredentials_Request()
 
         message.account_name = account_name
-        #protobuf definition uses string, so we need this to be a string. but we can't parse the regular text as 
-        #a string because it's enciphered and contains illegal characters. b64 fixes this. 
-        #Then we make it a utf-8 string, and better proto then makes it bytes again when it's packed alongside all other message fields and sent along the websocket. 
-        #inelegant but the price you pay for proper type checking. 
-        message.encrypted_password = str(base64.b64encode(enciphered_password), "utf-8")
+        message.encrypted_password = base64.b64encode(enciphered_password) #i think it needs to be in this format, we can try doing it without after if it doesn't work.
         message.website_id = "Client"
         message.device_friendly_name = friendly_name
         message.encryption_timestamp = timestamp
         message.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient #no idea if this line will work.
-        message.persistence = ESessionPersistence.k_ESessionPersistence_Persistent
+        #message.persistence = ESessionPersistence.k_ESessionPersistence_Persistent # this is the default value and i have no idea how reflected enums work in python.
 
-        #message.device_details = device_details
+        #device details is readonly. So we can't do this the easy way by creating a new instance and populating it directly. 
         #so let's do it the hard way.
         message.device_details.device_friendly_name = friendly_name
         message.device_details.os_type = os_value if os_value >= 0 else 0
         message.device_details.platform_type= EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
-        #message.guard_data = ""
+        
         logger.info("Sending log on message using credentials in new authorization workflow")
 
         await self._send_service_method_with_name(message, LOGIN_CREDENTIALS)
 
     async def _process_login(self, result, body):
-        message = CAuthentication_BeginAuthSessionViaCredentials_Response().parse(body)
+        message = CAuthentication_BeginAuthSessionViaCredentials_Response()
+        message.ParseFromString(body)
         logger.info("Processing Login Response!")
-        
+        """
+        client_id : int #the id assigned to us.
+        steamid : int #the id of the user that signed in
+        request_id : bytes #unique request id. needed for the polling function.
+        interval : float #interval to poll on.
+        allowed_confirmations : List[CAuthentication_AllowedConfirmation] #possible ways to authenticate for 2FA if needed.
+        #    Note: Possible values:
+        #       k_EAuthSessionGuardType_Unknown, k_EAuthSessionGuardType_None, k_EAuthSessionGuardType_EmailCode = 2, k_EAuthSessionGuardType_DeviceCode = 3,
+        #       k_EAuthSessionGuardType_DeviceConfirmation = 4, k_EAuthSessionGuardType_EmailConfirmation = 5, k_EAuthSessionGuardType_MachineToken = 6,
+        #   For the sake of copypasta, we're only supporting EmailCode, DeviceCode, and None. Unknown is expected, somewhat, but it's an error.
+        weak_token : string #ignored
+        agreement_session_url: string #ignored?
+        extended_error_message : string #used for errors.
+        """
         ##TODO: IF WE GET ERRORS UNSET THIS.
         #if (self.steam_id is None and message.steamid is not None):
         #    self.steam_id = message.steamidd
@@ -279,7 +285,8 @@ class ProtobufClient:
         await self._send_service_method_with_name(message, UPDATE_TWO_FACTOR)
 
     async def _process_steamguard_update(self, result, body):
-        message = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response().parse(body)
+        message = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response()
+        message.ParseFromString(body)
         logger.info("Processing Two Factor Response!")
         #this gives us a confirm url, but as of this writing we can ignore it. so, just the result is necessary.
 
@@ -296,7 +303,8 @@ class ProtobufClient:
         await self._send_service_method_with_name(message, CHECK_AUTHENTICATION_STATUS)
 
     async def _process_auth_poll_status(self, result, body):
-        message = CAuthentication_PollAuthSessionStatus_Response().parse(body)
+        message = CAuthentication_PollAuthSessionStatus_Response()
+        message.ParseFromString(body)
 
         if (self.poll_status_handler is not None):
             await self.poll_status_handler(result, message)
@@ -322,6 +330,67 @@ class ProtobufClient:
         #Username = pollResponse.AccountName,
         #AccessToken = pollResponse.RefreshToken,
         #ShouldSavePassword = True #err on side of caution in case this not being set causes them to ignore access token. then try false. 
+        """
+            var logon = new ClientMsgProtobuf<CMsgClientLogon>( EMsg.ClientLogon );
+
+            SteamID steamId = new SteamID( details.AccountID, details.AccountInstance, Client.Universe, EAccountType.Individual );
+
+            if ( details.LoginID.HasValue )
+            {
+                // TODO: Support IPv6 login ids?
+                logon.Body.obfuscated_private_ip = new CMsgIPAddress
+                {
+                    v4 = details.LoginID.Value
+                };
+            }
+            else
+            {
+                logon.Body.obfuscated_private_ip = NetHelpers.GetMsgIPAddress( this.Client.LocalIP! ).ObfuscatePrivateIP();
+            }
+
+            // Legacy field, Steam client still sets it
+            if ( logon.Body.obfuscated_private_ip.ShouldSerializev4() )
+            {
+                logon.Body.deprecated_obfustucated_private_ip = logon.Body.obfuscated_private_ip.v4;
+            }
+
+            logon.ProtoHeader.client_sessionid = 0;
+            logon.ProtoHeader.steamid = steamId.ConvertToUInt64();
+
+            logon.Body.account_name = details.Username; //Null
+            logon.Body.password = details.Password; //Null
+            logon.Body.should_remember_password = details.ShouldRememberPassword; //false
+
+            logon.Body.protocol_version = MsgClientLogon.CurrentProtocol; 
+            logon.Body.client_os_type = ( uint )details.ClientOSType; //
+            logon.Body.client_language = details.ClientLanguage;
+            logon.Body.cell_id = details.CellID ?? Client.Configuration.CellID //
+
+            logon.Body.steam2_ticket_request = details.RequestSteam2Ticket;
+
+            // we're now using the latest steamclient package version, this is required to get a proper sentry file for steam guard
+            logon.Body.client_package_version = 1771; // todo: determine if this is still required
+            logon.Body.supports_rate_limit_response = true;
+            logon.Body.machine_name = details.MachineName;
+            logon.Body.machine_id = HardwareUtils.GetMachineID( Client.Configuration.MachineInfoProvider );
+
+            // steam guard 
+            logon.Body.auth_code = details.AuthCode;
+            logon.Body.two_factor_code = details.TwoFactorCode;
+
+#pragma warning disable CS0618 // LoginKey is obsolete
+            logon.Body.login_key = details.LoginKey;
+#pragma warning restore CS0618 // LoginKey is obsolete
+
+            logon.Body.access_token = details.AccessToken;
+
+            logon.Body.sha_sentryfile = details.SentryFileHash;
+            logon.Body.eresult_sentryfile = ( int )( details.SentryFileHash != null ? EResult.OK : EResult.FileNotFound );
+
+
+            this.Client.Send( logon );
+        }
+        """
         resetSteamIDAfterThisCall : bool = False
         if (self.confirmed_steam_id is None):
             resetSteamIDAfterThisCall = True
@@ -339,6 +408,7 @@ class ProtobufClient:
         message.machine_id = machine_id
         message.account_name = account_name
         #message.password = ""
+        #message.password = None
         message.should_remember_password = True
         message.eresult_sentryfile = EResult.FileNotFound
         message.machine_name = sock.gethostname()
@@ -358,7 +428,8 @@ class ProtobufClient:
 
     async def _process_client_log_on_response(self, body):
         logger.debug("Processing message ClientLogOnResponse")
-        message = CMsgClientLogonResponse().parse(body)
+        message = CMsgClientLogonResponse()
+        message.ParseFromString(body)
         result = message.eresult
         interval = message.heartbeat_seconds
         if result == EResult.OK:
@@ -424,26 +495,25 @@ class ProtobufClient:
     async def get_packages_info(self, steam_licenses: List[SteamLicense]):
         logger.info("Sending call %s with %d package_ids", repr(EMsg.ClientPICSProductInfoRequest), len(steam_licenses))
         message = CMsgClientPICSProductInfoRequest()
-        message.packages = list()
 
         for steam_license in steam_licenses:
-            info = CMsgClientPICSProductInfoRequestPackageInfo()
-            info.packageid = steam_license.license_data.package_id
-            info.access_token = steam_license.license_data.access_token
-            message.packages.append(info)
+            info = message.packages.add()
+            info.packageid = steam_license.license.package_id
+            info.access_token = steam_license.license.access_token
 
         await self._send(EMsg.ClientPICSProductInfoRequest, message)
 
-    async def get_apps_info(self, app_ids : List[int]):
+    async def get_apps_info(self, app_ids):
         logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
         message = CMsgClientPICSProductInfoRequest()
 
         for app_id in app_ids:
-            message.apps.append(app_id)
+            info = message.apps.add()
+            info.appid = app_id
 
         await self._send(EMsg.ClientPICSProductInfoRequest, message)
 
-    async def get_presence_localization(self, appid: int , language: str = 'english'):
+    async def get_presence_localization(self, appid, language='english'):
         logger.info(f"Sending call for rich presence localization with {appid}, {language}")
         message = CCommunity_GetAppRichPresenceLocalization_Request()
 
@@ -454,10 +524,26 @@ class ProtobufClient:
         await self._send(EMsg.ServiceMethodCallFromClient, message, job_id, None,
                          target_job_name= GET_APP_RICH_PRESENCE)
 
-    async def _send(self, emsg : EMsg, message: Message, source_job_id: Optional[int] = None,
-                    target_job_id: Optional[int] = None, target_job_name: Optional[str] = None):
-        proto_header = CMsgProtoBufHeader()
+    async def accept_update_machine_auth(self, jobid_target, sha_hash, offset, filename, cubtowrite):
+        message = CMsgClientUpdateMachineAuthResponse()
+        message.filename = filename
+        message.eresult = EResult.OK
+        message.sha_file = sha_hash
+        message.getlasterror = 0
+        message.offset = offset
+        message.cubwrote = cubtowrite
 
+        await self._send(EMsg.ClientUpdateMachineAuthResponse, message, None, jobid_target, None)
+
+    async def _send(
+        self,
+        emsg,
+        message,
+        source_job_id=None,
+        target_job_id=None,
+        target_job_name=None
+    ):
+        proto_header = CMsgProtoBufHeader()
         if self.confirmed_steam_id is not None:
             proto_header.steamid = self.confirmed_steam_id
         else:
@@ -471,11 +557,9 @@ class ProtobufClient:
         if target_job_name is not None:
             proto_header.target_job_name = target_job_name
 
-        header = bytes(proto_header)
-        body = bytes(message)
+        header = proto_header.SerializeToString()
 
-        #Magic string decoded: < = little endian. 2I = 2 x unsigned integer. 
-        #emsg | proto_mash is the first UInt, length of header is the second UInt.
+        body = message.SerializeToString()
         data = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
         data = data + header + body
 
@@ -485,34 +569,28 @@ class ProtobufClient:
             logger.info("[Out] %s (%dB)", repr(emsg), len(data))
         await self._socket.send(data)
 
-    async def _process_packet(self, packet: bytes):
+    async def _process_packet(self, packet):
         package_size = len(packet)
-        #packets reserve the first 8 bytes for the Message code (emsg) and 
         logger.debug("Processing packet of %d bytes", package_size)
-
         if package_size < 8:
             logger.warning("Package too small, ignoring...")
-            return
-
-        raw_emsg = int.from_bytes(packet[:4], "little")
-        emsg: int = raw_emsg & ~self._PROTO_MASK 
-
+        raw_emsg = struct.unpack("<I", packet[:4])[0]
+        emsg: int = raw_emsg & ~self._PROTO_MASK
         if raw_emsg & self._PROTO_MASK != 0:
-            header_len = int.from_bytes(packet[4:8], "little")
-            header = CMsgProtoBufHeader().parse(packet[8:8 + header_len])
-
+            header_len = struct.unpack("<I", packet[4:8])[0]
+            header = CMsgProtoBufHeader()
+            header.ParseFromString(packet[8:8 + header_len])
             if header.client_sessionid != 0:
                 if self._session_id is None:
                     logger.info("New session id: %d", header.client_sessionid)
                     self._session_id = header.client_sessionid
                 if self._session_id != header.client_sessionid:
-                    logger.warning('Received session_id %s while client one is %s', header.client_sessionid, self._session_id)
-
+                    logger.warning('Received session_id %s while client one is %s', header.client_sessionId, self._session_id)
             await self._process_message(emsg, header, packet[8 + header_len:])
         else:
             logger.warning("Packet for %d -> EMsg.%s with extended header - ignoring", emsg, EMsg(emsg).name)
 
-    async def _process_message(self, emsg: int, header: CMsgProtoBufHeader, body: bytes):
+    async def _process_message(self, emsg: int, header, body):
         logger.info("[In] %d -> EMsg.%s", emsg, EMsg(emsg).name)
         if emsg == EMsg.Multi:
             await self._process_multi(body)
@@ -535,15 +613,16 @@ class ProtobufClient:
         elif emsg == EMsg.ClientPlayerNicknameList:
             await self._process_user_nicknames(body)
         elif emsg == EMsg.ServiceMethod:
-            await self._process_service_method_response(header.target_job_name, int(header.jobid_target), header.eresult, body)
+            await self._process_service_method_response(header.target_job_name, header.jobid_target, header.eresult, body)
         elif emsg == EMsg.ServiceMethodResponse:
-            await self._process_service_method_response(header.target_job_name, int(header.jobid_target), header.eresult, body)
+            await self._process_service_method_response(header.target_job_name, header.jobid_target, header.eresult, body)
         else:
             logger.warning("Ignored message %d", emsg)
 
-    async def _process_multi(self, body: bytes):
+    async def _process_multi(self, body):
         logger.debug("Processing message Multi")
-        message = CMsgMulti().parse(body)
+        message = CMsgMulti()
+        message.ParseFromString(body)
         if message.size_unzipped > 0:
             loop = asyncio.get_running_loop()
             data = await loop.run_in_executor(None, gzip.decompress, message.message_body)
@@ -554,19 +633,21 @@ class ProtobufClient:
         offset = 0
         size_bytes = 4
         while offset + size_bytes <= data_size:
-            size = int.from_bytes(data[offset:offset + size_bytes], "little")
+            size = struct.unpack("<I", data[offset:offset + size_bytes])[0]
             await self._process_packet(data[offset + size_bytes:offset + size_bytes + size])
             offset += size_bytes + size
         logger.debug("Finished processing message Multi")
 
-    async def _process_account_info(self, body: bytes):
+    async def _process_account_info(self, body):
         logger.debug("Processing message ClientAccountInfo")
-        #message = CMsgClientAccountInfo().parse(body)
+        #message = CMsgClientAccountInfo()
+        #message.ParseFromString(body)
         logger.info("Client Account Info Message currently unused. It it redundant")
 
-    async def _process_client_logged_off(self, body: bytes):
+    async def _process_client_logged_off(self, body):
         logger.debug("Processing message ClientLoggedOff")
-        message = CMsgClientLoggedOff().parse(body)
+        message = CMsgClientLoggedOff()
+        message.ParseFromString(body)
         result = message.eresult
 
         assert self._heartbeat_task is not None
@@ -575,22 +656,23 @@ class ProtobufClient:
         if self.log_off_handler is not None:
             await self.log_off_handler(result)
 
-    async def _process_user_nicknames(self, body: bytes):
+    async def _process_user_nicknames(self, body):
         logger.debug("Processing message ClientPlayerNicknameList")
-        message = CMsgClientPlayerNicknameList().parse(body)
+        message = CMsgClientPlayerNicknameList()
+        message.ParseFromString(body)
         nicknames = {}
         for player_nickname in message.nicknames:
             nicknames[str(player_nickname.steamid)] = player_nickname.nickname
 
         await self.user_nicknames_handler(nicknames)
 
-    async def _process_client_friend_list(self, body: bytes):
+    async def _process_client_friend_list(self, body):
         logger.debug("Processing message ClientFriendsList")
         if self.relationship_handler is None:
             return
 
-        message = CMsgClientFriendsList().parse(body)
-
+        message = CMsgClientFriendsList()
+        message.ParseFromString(body)
         friends = {}
         for relationship in message.friends:
             steam_id = relationship.ulfriendid
@@ -600,76 +682,83 @@ class ProtobufClient:
 
         await self.relationship_handler(message.bincremental, friends)
 
-    async def _process_client_persona_state(self, body: bytes):
+    async def _process_client_persona_state(self, body):
         logger.debug("Processing message ClientPersonaState")
         if self.user_info_handler is None:
             return
 
-        message = CMsgClientPersonaState().parse(body)
+        message = CMsgClientPersonaState()
+        message.ParseFromString(body)
 
         for user in message.friends:
             user_id = user.friendid
-            if user_id == self.confirmed_steam_id and user.game_played_app_id != 0:
-                await self.get_apps_info([user.game_played_app_id])
-
-            user_info = ProtoUserInfo(
-                name=user.player_name,
-                avatar_hash=user.avatar_hash,
-                state=EPersonaState(user.persona_state),
-                game_id=user.gameid
-            )
-
-            rich_presence: Dict[str, str] = {}
-            for element in user.rich_presence:
-                rich_presence[element.key] = element.value
-                if element.key == 'status' and element.value:
-                    if "#" in element.value:
-                        await self.translations_handler(user.gameid)
-                if element.key == 'steam_display' and element.value:
-                    if "#" in element.value:
-                        await self.translations_handler(user.gameid)
-
-            user_info.rich_presence = rich_presence
-            user_info.game_name = user.game_name
+            if user_id == self.confirmed_steam_id and int(user.game_played_app_id) != 0:
+                await self.get_apps_info([int(user.game_played_app_id)])
+            user_info = ProtoUserInfo()
+            if user.HasField("player_name"):
+                user_info.name = user.player_name
+            if user.HasField("avatar_hash"):
+                user_info.avatar_hash = user.avatar_hash
+            if user.HasField("persona_state"):
+                user_info.state = EPersonaState(user.persona_state)
+            if user.HasField("gameid"):
+                user_info.game_id = user.gameid
+                rich_presence: Dict[str, str] = {}
+                for element in user.rich_presence:
+                    if type(element.value) == bytes:
+                        logger.warning(f"Unsupported presence type: {type(element.value)} {element.value}")
+                        rich_presence = {}
+                        break
+                    rich_presence[element.key] = element.value
+                    if element.key == 'status' and element.value:
+                        if "#" in element.value:
+                            await self.translations_handler(user.gameid)
+                    if element.key == 'steam_display' and element.value:
+                        if "#" in element.value:
+                            await self.translations_handler(user.gameid)
+                user_info.rich_presence = rich_presence
+            if user.HasField("game_name"):
+                user_info.game_name = user.game_name
 
             await self.user_info_handler(user_id, user_info)
 
-    @staticmethod
-    def _parallel_process_license(license_: CMsgClientLicenseListLicense, owner_id: int) -> Optional[SteamLicense]:
-        # license_.type 1024 = free games
-        # license_.flags 520 = unidentified trash entries (games which are not owned nor are free)
-        if license_.flags == 520:
-            return None
-
-        if license_.package_id == 0:
-            # Packageid 0 contains trash entries for every user
-            #logger.debug("Skipping packageid 0 ")
-            return None
-
-        if license_.owner_id == owner_id:
-            return SteamLicense(license_data=license_, shared=False)
-        else:
-            return SteamLicense(license_data=license_, shared=True)
-
-    async def _process_license_list(self, body: bytes):
+    async def _process_license_list(self, body):
         logger.debug("Processing message ClientLicenseList")
         if self.license_import_handler is None:
             return
 
-        message : CMsgClientLicenseList = CMsgClientLicenseList().parse(body)
-        message_license_list = message.licenses
+        message = CMsgClientLicenseList()
+        message.ParseFromString(body)
 
-        owner_id: int =  int(self.confirmed_steam_id - self._ACCOUNT_ID_MASK)
-        licenses_to_check : List[SteamLicense] = await parallel_map_async(message_license_list, lambda x : ProtocolParser._parallel_process_license(message_license_list, owner_id))
-        
+        licenses_to_check = []
+
+        for license in message.licenses:
+            # license.type 1024 = free games
+            # license.flags 520 = unidentified trash entries (games which are not owned nor are free)
+            if int(license.flags) == 520:
+                continue
+
+            if license.package_id == 0:
+                # Packageid 0 contains trash entries for every user
+                logger.debug("Skipping packageid 0 ")
+                continue
+
+            if int(license.owner_id) == int(self.confirmed_steam_id - self._ACCOUNT_ID_MASK):
+                licenses_to_check.append(SteamLicense(license=license, shared=False))
+            else:
+                if license.package_id in licenses_to_check:
+                    continue
+                licenses_to_check.append(SteamLicense(license=license, shared=True))
+
         await self.license_import_handler(licenses_to_check)
 
-    async def _process_product_info_response(self, body : bytes):
+    async def _process_product_info_response(self, body):
         logger.debug("Processing message ClientPICSProductInfoResponse")
-        message = CMsgClientPICSProductInfoResponse().parse(body)
-        apps_to_parse: List[str] = []
+        message = CMsgClientPICSProductInfoResponse()
+        message.ParseFromString(body)
+        apps_to_parse = []
 
-        def product_info_handler(packages: List[CMsgClientPICSProductInfoResponsePackageInfo], apps: List[CMsgClientPICSProductInfoResponseAppInfo]):
+        def product_info_handler(packages, apps):
             for info in packages:
                 self.package_info_handler()
 
@@ -685,21 +774,21 @@ class ProtobufClient:
                     apps_to_parse.append(app)
 
             for info in apps:
-                app_content : dict = vdf.loads(info.buffer[:-1].decode('utf-8', 'replace'))
+                app_content = vdf.loads(info.buffer[:-1].decode('utf-8', 'replace'))
                 appid = str(app_content['appinfo']['appid'])
                 try:
-                    type_ : str = app_content['appinfo']['common']['type'].lower()
-                    title : str = app_content['appinfo']['common']['name']
-                    parent : Optional[str] = None
+                    type_ = app_content['appinfo']['common']['type'].lower()
+                    title = app_content['appinfo']['common']['name']
+                    parent = None
                     if 'extended' in app_content['appinfo'] and type_ == 'dlc':
                         parent = app_content['appinfo']['extended']['dlcforappid']
                         logger.debug(f"Retrieved dlc {title} for {parent}")
-                    if type_ == 'game':
+                    if type == 'game':
                         logger.debug(f"Retrieved game {title}")
-                    self.app_info_handler(appid=appid, title=title, type_=type_, parent=parent)
+                    self.app_info_handler(appid=appid, title=title, type=type_, parent=parent)
                 except KeyError:
                     logger.warning(f"Unrecognized app structure {app_content}")
-                    self.app_info_handler(appid=appid, title='unknown', type_='unknown', parent=None)
+                    self.app_info_handler(appid=appid, title='unknown', type='unknown', parent=None)
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, product_info_handler, message.packages, message.apps)
@@ -708,16 +797,18 @@ class ProtobufClient:
             logger.debug("Apps to parse: %s", str(apps_to_parse))
             await self.get_apps_info(apps_to_parse)
 
-    async def _process_rich_presence_translations(self, body: bytes):
-        message = CCommunity_GetAppRichPresenceLocalization_Response().parse(body)
+    async def _process_rich_presence_translations(self, body):
+        message = CCommunity_GetAppRichPresenceLocalization_Response()
+        message.ParseFromString(body)
 
         # keeping info log for further rich presence improvements
         logger.info(f"Received information about rich presence translations for {message.appid}")
         await self.translations_handler(message.appid, message.token_lists)
 
-    async def _process_user_stats_response(self, body: bytes):
+    async def _process_user_stats_response(self, body):
         logger.debug("Processing message ClientGetUserStatsResponse")
-        message : CMsgClientGetUserStatsResponse = CMsgClientGetUserStatsResponse().parse(body)
+        message = CMsgClientGetUserStatsResponse()
+        message.ParseFromString(body)
 
         game_id = str(message.game_id)
         stats = message.stats
@@ -726,15 +817,17 @@ class ProtobufClient:
 
         self.stats_handler(game_id, stats, achievement_blocks, achievements_schema)
 
-    async def _process_user_time_response(self, body: bytes):
-        message = CPlayer_GetLastPlayedTimes_Response().parse(body)
+    async def _process_user_time_response(self, body):
+        message = CPlayer_GetLastPlayedTimes_Response()
+        message.ParseFromString(body)
         for game in message.games:
             logger.debug(f"Processing game times for game {game.appid}, playtime: {game.playtime_forever} last time played: {game.last_playtime}")
             await self.times_handler(game.appid, game.playtime_forever, game.last_playtime)
         await self.times_import_finished_handler(True)
 
-    async def _process_collections_response(self, body: bytes):
-        message = CCloudConfigStore_Download_Response().parse(body)
+    async def _process_collections_response(self, body):
+        message = CCloudConfigStore_Download_Response()
+        message.ParseFromString(body)
 
         for data in message.data:
             for entry in data.entries:
@@ -745,7 +838,7 @@ class ProtobufClient:
                     pass
         self.collections['event'].set()
 
-    async def _process_service_method_response(self, target_job_name: str, target_job_id: int, eresult: EResult, body: bytes):
+    async def _process_service_method_response(self, target_job_name, target_job_id, eresult, body):
         logger.info("Processing message ServiceMethodResponse %s", target_job_name)
         if target_job_name == GET_APP_RICH_PRESENCE:
             await self._process_rich_presence_translations(body)
