@@ -163,9 +163,7 @@ class SteamPlugin(Plugin):
     async def prepare_subscription_games_context(self, subscription_names: List[str]) -> Any:
         return await self._backend.prepare_subscription_games_context(subscription_names)
 
-    async def get_subscription_games(
-        self, subscription_name: str, context: Any
-    ) -> AsyncGenerator[List[SubscriptionGame], None]:
+    async def get_subscription_games(self, subscription_name: str, context: Any) -> AsyncGenerator[List[SubscriptionGame], None]:
         async for hunk in self._backend.get_subscription_games(subscription_name, context):
             yield hunk
 
@@ -288,6 +286,11 @@ class SteamPlugin(Plugin):
             return None
 
     async def shutdown_platform_client(self) -> None:
+        """
+        Shuts down the steam client. Usually necessary for launching games due to DRM, but can be optionally closed on game exit, depending on user settings.
+
+        This is called by the GOG Galaxy client. 
+        """
         launch_debounce_time = 30
         if time.time() < self._last_launch + launch_debounce_time:
             # workaround for quickly closed game (Steam sometimes dumps false positive just after a launch)
