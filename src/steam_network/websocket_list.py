@@ -18,8 +18,12 @@ def current_time() -> float:
 
 
 class WebSocketList:
-    def __init__(self, http_client: SteamHttpClient):
-        self._http_client = http_client
+    """ A list of urls we can connect to steam with via a websocket. this class also stores the status of individual servers should they kick us out.
+
+    When a server kicks us out (usually for inactivity), we blacklist the server and choose a new one. servers will allow us back after a period of time, so they are given a cooldown.
+    """
+    def __init__(self):
+        self._http_client = SteamHttpClient()
         self._servers_blacklist: Dict[HostName, Timeout] = {}
     
     @staticmethod 

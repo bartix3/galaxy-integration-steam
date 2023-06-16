@@ -1,248 +1,218 @@
+""" Plugin.py
+
+Contains the main functionality needed to integrate this plugin. the entry point from GOG is start_and_run_plugin but it can be run from main for testing.
+
+CHANGELOG: 6/17/2023:
+stripped down and re-implemented a barebones version of the plugin. For example, Tick no longer checks the local store for newly installed games. Removed all calls to backend steam network, this now uses
+a dedicated "controller". For review purposes, you can think of the "controller" as a new steam network backend, without the interface cloak and dagger. any Steam-API related functionality is passed to the controller.
+Any local lookups about the user's system (launch games, install size, etc) are handled here and are largely unchanged. 
+
+
+"""
+
+
+
+import platform
 import asyncio
 import logging
-import platform
-import subprocess
-import ssl
+import traceback
 import sys
 import webbrowser
+import subprocess
 import time
-from functools import partial
-from contextlib import suppress
-from typing import List, Optional, NewType, Dict, AsyncGenerator, Any, Callable, Type
 
-import traceback
+from typing import Dict, List, Any, AsyncGenerator, Union, Optional
 
-from asyncio import Task
 
-import certifi
+from galaxy.api.types import Game, Subscription, SubscriptionGame, Achievement, NextStep, Authentication, GameTime, UserPresence, GameLibrarySettings, UserInfo, SubscriptionDiscovery
 from galaxy.api.plugin import Plugin, create_and_run_plugin
-from galaxy.api.types import (
-    LocalGame,
-    LocalGameState,
-    UserPresence,
-    UserInfo,
-    Game,
-    GameLibrarySettings,
-    GameTime,
-    Achievement,
-    SubscriptionGame,
-    Subscription,
-)
-from galaxy.api.errors import (
-    AccessDenied,
-    InvalidCredentials,
-    NetworkError,
-    UnknownError,
-)
 from galaxy.api.consts import Platform
 
-from backend_interface import BackendInterface
-from backend_steam_network import SteamNetworkBackend
-from http_client import HttpClient
-from client import (
-    StateFlags,
-    local_games_list,
-    get_state_changes,
-    get_client_executable,
-    load_vdf,
-    get_library_folders,
-    get_app_manifests,
-    app_id_from_manifest_path,
-)
-from persistent_cache_state import PersistentCacheState
-from registry_monitor import get_steam_registry_monitor
-from uri_scheme_handler import is_uri_handler_installed
-from version import __version__
 
+from .version import __version__
+from .steam_network.steam_network_controller import SteamNetworkController
+from .client import local_games_list, get_library_folders, StateFlags, get_state_changes, get_client_executable, load_vdf, get_app_manifests, app_id_from_manifest_path
+from uri_scheme_handler import is_uri_handler_installed
 
 logger = logging.getLogger(__name__)
 
-Timestamp = NewType("Timestamp", int)
-
-COOLDOWN_TIME = 5
-AUTH_SETUP_ON_VERSION__CACHE_KEY = "auth_setup_on_version"
-
+FAMILY_SHARE = "Steam Family Share"
 
 def is_windows():
     return platform.system().lower() == "windows"
 
 
 class SteamPlugin(Plugin):
+    """Class that implements the steam plugin in a way that GOG Galaxy recognizes.
+
+    Functionality is implemented by implementing abstract functions defined in the Plugin class from the galaxy api.
+    Functionality that requires communication with Steam is handled by a dedicated SteamNetworkController instance within this class. 
+    Functionality that interacts with the user's operating system, such as install size, launching a game, etc are handled in this class directly. 
+
+    Background tasks are responsible for obtaining and caching information that GOG Galaxy Client will use in the future, but is not currently requesting. Steam occasionally gives us updates without us asking for them.
+    """
     def __init__(self, reader, writer, token):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
+        self._controller = SteamNetworkController()
 
-        # local features
-        self._regmon = get_steam_registry_monitor()
-        self._local_games_cache: Optional[List[LocalGame]] = None
-        self._last_launch: Timestamp = 0
-        self._update_local_games_task = asyncio.create_task(asyncio.sleep(0))
+    #features are normally auto-detected. Since we only support one form of login, we can allow this behavior. 
 
-        # http client
-        self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        self._ssl_context.load_verify_locations(certifi.where())
-        self._http_client = HttpClient()
+    #region startup, login, and shutdown
 
-        # cache management
-        self._persistent_storage_state = PersistentCacheState()
-        self._pushing_cache_task = asyncio.create_task(asyncio.sleep(0))
-
-        # backend client
-        self.__backend: Optional[BackendInterface] = None
-        self.__backend_mode : Type[BackendInterface] = SteamNetworkBackend
-
-        self._run_task : Optional[Task] = None
-
-    @property
-    def features(self):
-        non_backend_features = set(super().features) - set(BackendInterface.POSSIBLE_FEATURES)
-        return list(non_backend_features | self.__backend_mode.features())
-
-    @property
-    def _backend(self) -> BackendInterface:
-        if self.__backend is None:
-            raise UnknownError("Backend not set")
-        return self.__backend
-    
     def handshake_complete(self):
-        self.__backend = self._load_steam_network_backend()
-        logger.info("Handshake complete")
+        """ Called when the handshake between GOG Galaxy Client and this plugin has completed. 
 
-    def _load_steam_network_backend(self):
-        http_client : HttpClient = self._http_client
-        persistent_storage_state=self._persistent_storage_state
-        persistent_cache=self.persistent_cache
-        store_credentials=self.store_credentials
-        ssl_context=self._ssl_context
-        update_user_presence=self.update_user_presence
-        add_game=self.add_game
-
-        return SteamNetworkBackend(http_client, ssl_context, persistent_storage_state, persistent_cache, update_user_presence, store_credentials, add_game)
+        This means that GOG Galaxy Client recognizes our plugin and is communicating with us.
+        Any initialization required on the client that is necessary for the plugin to work is now complete.
+        This means things like the persistent cache are now available to us.
+        """
+        self._controller.handshake_complete()
     
-    async def pass_login_credentials(self, step, credentials, cookies):
-        result = await self._backend.pass_login_credentials(step, credentials, cookies)
-        self.__store_current_version_in_cache(key=AUTH_SETUP_ON_VERSION__CACHE_KEY)
-        return result
+    async def authenticate(self, stored_credentials : Dict[str, Any] = None) -> Union[Authentication, NextStep]:
+        """ Called when the plugin attempts to log the user in. This occurs at the start, after the handshake.
+ 
+        stored_credentials are a mapping of a name to data of any type that were saved from previous session(s)
+        Returns either an Authentication object, which represents a successfuly login (from stored credentials) \
+or a NextStep object, which tells GOG to display a webpage with the information necessary to get further login information from the user.
+        """
+        return await self._controller.authenticate(stored_credentials)
 
-    def __store_current_version_in_cache(self, key: str):
-        if self.persistent_cache.get(key) != __version__:
-            self.persistent_cache[key] = __version__
-            self.push_cache()
+    async def pass_login_credentials(self, _ : str, credentials: Dict[str, str], cookies : List[Dict[str, str]]):
+        """ Called when a webpage generated from a NextStep object completes.
         
-    async def authenticate(self, stored_credentials=None):
-        try:
-            auth = await self._backend.authenticate(stored_credentials)
-        except NetworkError:  # casuses "Offline. Retry"
-            raise
-        except (
-            InvalidCredentials, AccessDenied,  # re-raised would cause "Connection Lost"
-            Exception  # re-raised would cause "Offline. Retry"
-        ) as e:
-            logger.error(traceback.format_exc())
-            logger.warning(f"Authentication for initial backend failed with {e!r}")
-            raise e
+        this function contains an unused string that is deprecated. it's value is not defined. 
+        credentials contain the URL Parameters obtained from the end uri that caused the webpage to complete as a tuple of name and value.
+        cookies is a list of cookies that may have been saved and available to the end uri. A cookie is a collection of tuples of name and value.
 
-        return auth
+        Returns either an Authentication object, which represents a successfuly login or a NextStep object, \
+with a new webpage to display, in the event the user improperly input their information, or needs to provide additional information such as 2FA.
+
+        This function may be called multiple times when the user is logging in, depending on 2FA or failed login attempts.
+        """
+        await self._controller.pass_login_credentials(self, credentials, cookies)
 
     async def shutdown(self):
-        self._regmon.close()
-        await self._http_client.close()
-        await self._backend.shutdown()
+        """Called when GOG Galaxy Client is shutdown or the plugin is disconnected by the user. 
+        """
+        await self._controller.shutdown()
+        pass
 
-        with suppress(asyncio.CancelledError):
-            self._update_local_games_task.cancel()
-            self._pushing_cache_task.cancel()
-            await self._update_local_games_task
-            await self._pushing_cache_task
-
+    #endregion End startup, login, and shutdown. 
+    #region owned games and subscriptions
     async def get_owned_games(self) -> List[Game]:
-        return await self._backend.get_owned_games()
+        """ Get a list of games the user currently owns. Passed to controller.
+
+        This is not a generator, i'm not sure why.
+        """
+        return await self._controller.get_owned_games()
 
     async def get_subscriptions(self) -> List[Subscription]:
-        return await self._backend.get_subscriptions()
+        """ Get a list of subscriptions sources the user currently subscribes to. This is not the games themselves. 
 
-    async def prepare_subscription_games_context(self, subscription_names: List[str]) -> Any:
-        return await self._backend.prepare_subscription_games_context(subscription_names)
+        This is just the steam family share as far as i can tell. 
+        """
+        return [Subscription(FAMILY_SHARE, True, None, SubscriptionDiscovery.AUTOMATIC)] #defaults to you have it, even if it's no games.
+        #return [Subscription(FAMILY_SHARE, None, None, SubscriptionDiscovery.AUTOMATIC)] #legal but i have no idea what happens. 
 
-    async def get_subscription_games(self, subscription_name: str, context: Any) -> AsyncGenerator[List[SubscriptionGame], None]:
-        async for hunk in self._backend.get_subscription_games(subscription_name, context):
-            yield hunk
 
-    async def prepare_achievements_context(self, game_ids: List[str]) -> Any:
-        return await self._backend.prepare_achievements_context(game_ids)
+    async def prepare_subscription_games_context(self, subscription_names: List[str]) -> None:
+        """ Start a batch process to get all subscription games for the list of available subscription sources.
 
-    async def get_unlocked_achievements(self, game_id: str, context: Any) -> List[Achievement]:
-        return await self._backend.get_unlocked_achievements(game_id, context)
+        For Steam, there is only one source of subscriptions: Steam Family Share. This is the only one we need to process.
+        Steam has one call that obtains all games at once, whether they are owned or subscription; however, it does tell us which a given game is.
+        Preparing for subscription games will also begin preparing for owned games, and vice versa. \
+If preparations for one of these functions has been started when the other is called, this call will have no effect.
+        """
+        if ("Steam Family Share" in subscription_names):
+            await self._controller.prepare_family_share()
 
-    async def prepare_game_times_context(self, game_ids: List[str]) -> Any:
-        return await self._backend.prepare_game_times_context(game_ids)
-
-    async def get_game_time(self, game_id: str, context: Dict[int, int]) -> GameTime:
-        return await self._backend.get_game_time(game_id, context)
-
-    async def prepare_game_library_settings_context(self, game_ids: List[str]) -> Any:
-        return await self._backend.prepare_game_library_settings_context(game_ids)
-
-    async def get_game_library_settings(self, game_id: str, context: Any) -> GameLibrarySettings:
-        return await self._backend.get_game_library_settings(game_id, context)
-
-    async def get_friends(self) -> List[UserInfo]:
-        return await self._backend.get_friends()
-
-    async def prepare_user_presence_context(self, user_ids: List[str]) -> Any:
-        return await self._backend.prepare_user_presence_context(user_ids)
-
-    async def get_user_presence(self, user_id: str, context: Any) -> UserPresence:
-        return await self._backend.get_user_presence(user_id, context)
-
-    def achievements_import_complete(self):
-        self._backend.achievements_import_complete()
-
-    def game_times_import_complete(self):
-        self._backend.game_times_import_complete()
-
-    def game_library_settings_import_complete(self):
-        self._backend.game_library_settings_import_complete()
-
-    def user_presence_import_complete(self):
-        self._backend.user_presence_import_complete()
+    #note to self, raise StopIterator to kill a generator. StopAsyncIterator is the async equivalent. there is no "yield break" in python.
+    
+    async def get_subscription_games(self, subscription_name: str, _: None) -> AsyncGenerator[List[SubscriptionGame], None]:
+        """ Get a list of games asynchronously that the user has subscribed to.
+        
+        If the string is not "Steam Family Share" this value will return nothing. Context is unused. 
+        """
+        if (subscription_name != FAMILY_SHARE):
+            raise StopAsyncIteration
+        else:
+            #can i just return the async generator itself? idk. so i'll just do this.
+            async for item in self._controller.get_family_share_games():
+                await item
 
     def subscription_games_import_complete(self):
-        self._backend.subscription_games_import_complete()
+        """ Updates all the imported games so they are written to the database cache.
 
-    async def _update_local_games(self):
-        loop = asyncio.get_running_loop()
-        new_list = await loop.run_in_executor(None, local_games_list)
-        notify_list = get_state_changes(self._local_games_cache, new_list)
-        self._local_games_cache = new_list
-        for game in notify_list:
-            if LocalGameState.Running in game.local_game_state:
-                self._last_launch = time.time()
-            self.update_local_game_status(game)
-        await asyncio.sleep(COOLDOWN_TIME)
+        This is called after all subscription games are successfully imported. 
+        """
+        self._controller.subscription_games_import_complete()
 
-    async def _push_cache(self):
-        self.push_cache()
-        self._persistent_storage_state.modified = False
-        await asyncio.sleep(
-            COOLDOWN_TIME
-        )  # lower pushing cache rate to do not clog socket in case of big cache
+    #endregion
+    #region Achievements
 
+    #as of this writing, there is no way to batch import achievements for multiple games. so this function does not add any functionality and actually bottlenecks the code. 
+    #this is therefore unused. Should this ever change, the logic can be optimized by retrieving that info here and then caching it so the get_unlocked_achievements does not do anything.
+    #async def prepare_achievements_context(self, game_ids: List[str]) -> Any:
+
+    #as of this writing, prepare_achievements_context is not overridden and therefore returns None. That result is then passed in here, so the value here is also None.
+    async def get_unlocked_achievements(self, game_id: str, _: None) -> List[Achievement]:
+        """Get the unlocked achievements for the provided game id. 
+
+        Games are imported one at a time because a batch import does not exist. Context is therefore None here. 
+        """
+        return await self._controller.get_unlocked_achievements(int(game_id))
+
+
+    def achievements_import_complete(self):
+        """Called when get_unlocked_achievements has been called on all game_ids. 
+        """
+        self._controller.achievements_import_complete()
+    #endregion
+    #region Play Time
+    async def prepare_game_times_context(self, game_ids: List[str]) -> None:
+        await self._controller.prepare_game_times_context(map(lambda x:int(x), game_ids))
+
+    async def get_game_time(self, game_id: str, _: None) -> GameTime:
+        return await self._controller.get_game_time(int(game_id))
+
+    def game_times_import_complete(self):
+        self._controller.game_times_import_complete()
+    #endregion
+    #region User-defined settings applied to their games
+    async def prepare_game_library_settings_context(self, game_ids: List[str]) -> None:
+        await self._controller.begin_get_tags_hidden_etc(map(lambda x: int(x), game_ids))
+
+    async def get_game_library_settings(self, game_id: str, _: None) -> GameLibrarySettings:
+        return await self.get_tags_hidden_etc(int(game_id))
+
+    def game_library_settings_import_complete(self):
+        self._controller.tags_hidden_etc_import_complete()
+    #endregion
+    #region friend info
+    async def get_friends(self) -> List[UserInfo]:
+        return await self._controller.get_friends()
+
+    async def prepare_user_presence_context(self, user_ids: List[str]) -> None:
+        await self._controller.prepare_user_presence(self, map(lambda x: int(x), user_ids))
+
+    async def get_user_presence(self, user_id: str, _: None) -> UserPresence:
+        return await self._controller.get_user_presence(int(user_id))
+
+    def user_presence_import_complete(self):
+        self._controller.user_presence_import_complete()
+    #endregion
+    
     def tick(self):
-        self._backend.tick()
+        self._controller.tick()
+        pass
 
-        if (
-            self._local_games_cache is not None
-            and self._update_local_games_task.done()
-            and self._regmon.is_updated()
-        ):
-            self._update_local_games_task = asyncio.create_task(self._update_local_games())
-
-        if self._pushing_cache_task.done() and self._persistent_storage_state.modified:
-            self._pushing_cache = asyncio.create_task(self._push_cache())
+    #region get info about and/or update games on local system:
 
     async def get_local_games(self):
-        loop = asyncio.get_running_loop()
-        self._local_games_cache = await loop.run_in_executor(None, local_games_list)
+        #i do not understand why this was run in executor (it's not going to increase performance afaik) but i'm leaving it in as a comment if i'm wrong.
+        #loop = asyncio.get_running_loop()
+        #self._local_games_cache = await loop.run_in_executor(None, local_games_list)
+        self._local_games_cache = local_games_list()
         return self._local_games_cache
 
     @staticmethod
@@ -254,21 +224,33 @@ class SteamPlugin(Plugin):
         else:
             webbrowser.open("https://store.steampowered.com/about/")
 
-    async def launch_game(self, game_id):
-        SteamPlugin._steam_command("launch", game_id)
-
-    async def install_game(self, game_id):
+    async def install_game(self, game_id: str):
+        """ installs the steam game with the given steam id.
+        """
         SteamPlugin._steam_command("install", game_id)
 
-    async def uninstall_game(self, game_id):
+    async def uninstall_game(self, game_id: str):
+        """ Uninstalls the steam game with the given steam id.
+        """
+        
         SteamPlugin._steam_command("uninstall", game_id)
+
+    async def launch_game(self, game_id: str):
+        """ Launches the steam game with the given steam id.
+        """
+        
+        SteamPlugin._steam_command("launch", game_id)
+
 
     async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, str]:
         library_folders = get_library_folders()
         app_manifests = list(get_app_manifests(library_folders))
         return {app_id_from_manifest_path(path): path for path in app_manifests}
+        
 
     async def get_local_size(self, game_id: str, context: Dict[str, str]) -> Optional[int]:
+        """ Returns the amount of space, in bytes, the game specificed by the game_id takes up on user storage. If it cannot be determined, returns None.
+        """
         try:
             manifest_path = context[game_id]
         except KeyError:  # not installed
@@ -284,10 +266,13 @@ class SteamPlugin(Plugin):
         except Exception as e:
             logger.warning("Cannot parse SizeOnDisk in %s: %r", manifest_path, e)
             return None
+    #endregion get info about and/or update games on local system:
+
+    #region launching/closing games.
 
     async def shutdown_platform_client(self) -> None:
         """
-        Shuts down the steam client. Usually necessary for launching games due to DRM, but can be optionally closed on game exit, depending on user settings.
+        Shuts down the steam client. Steam Client launches automatically when a game is started due to DRM, but can be optionally closed on game exit, depending on user settings.
 
         This is called by the GOG Galaxy client. 
         """
@@ -308,11 +293,15 @@ class SteamPlugin(Plugin):
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         await process.communicate()
-
+    #endregion
 
 def main():
+    """ Program entry point. starts the entire plugin. 
+    
+    Usually not necessary because we are a plugin, but useful for testing
+    """
     create_and_run_plugin(SteamPlugin, sys.argv)
 
-
+#subprocessess check. clever! necessary for parallel processing on windows since it doesn't have "fork"
 if __name__ == "__main__":
     main()

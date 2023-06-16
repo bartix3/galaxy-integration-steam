@@ -285,6 +285,7 @@ class WebSocketClient:
                     ret_code = UserActionRequired.InvalidAuthData
                 else:
                     logger.info(f'Updating two-factor with provided ' + to_helpful_string(method))
+                    #confirm login, expired, or invalid. 
                     ret_code = await self._protocol_client.update_two_factor(self._steam_polling_data.client_id, self._steam_polling_data.steam_id, code, method, auth_lost_handler)
             elif (mode == AuthCall.POLL_TWO_FACTOR):
                 is_confirm : bool = response.get('is-confirm', False)
@@ -292,7 +293,7 @@ class WebSocketClient:
                 (ret_code, new_client_id) = await self._protocol_client.check_auth_status(self._steam_polling_data.client_id, self._steam_polling_data.request_id, is_confirm, auth_lost_handler)
                 if (new_client_id is not None):
                     self._steam_polling_data.client_id = new_client_id
-            elif (mode == AuthCall.TOKEN):
+            elif (mode == AuthCall.TOKEN ):
                 logger.info("Finalizing Log in using the new auth refresh token and the classic login call")
                 ret_code = await self._protocol_client.finalize_login(self._user_info_cache.account_username, self._user_info_cache.steam_id, self._user_info_cache.refresh_token, auth_lost_handler)
             else:

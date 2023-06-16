@@ -229,7 +229,7 @@ class SteamNetworkBackend(BackendInterface):
             allowed_methods = self._authentication_cache.two_factor_allowed_methods
             method, msg = allowed_methods[0]
             if (method == TwoFactorMethod.Nothing):
-                result = await self._handle_steam_guard_none()
+                return await self._handle_steam_guard_none()
             elif (method == TwoFactorMethod.PhoneCode):
                 return next_step_response_simple(DisplayUriHelper.TWO_FACTOR_MOBILE)
             elif (method == TwoFactorMethod.EmailCode):

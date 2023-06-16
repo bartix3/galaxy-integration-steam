@@ -1,3 +1,14 @@
+""" client.py
+
+Contains top-level functions that provide functionality for interacting with the user's local storage and OS to check what games they have and such.
+
+CHANGELOG: 
+June 17, 2023: Added change log and documentation.
+
+"""
+
+
+
 import glob
 import itertools
 import logging

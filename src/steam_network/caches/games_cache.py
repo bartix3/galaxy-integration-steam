@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
 from typing import Any, List, Dict, Optional, Set, AsyncGenerator
@@ -37,7 +39,7 @@ class LicensesCache:
     apps: Dict[str, App] = field(default_factory=dict)
 
     @classmethod
-    def migrateV1(cls, data: str) -> "LicensesCache":
+    def migrateV1(cls, data: str) -> LicensesCache:
         obj = json.loads(data)
 
         for appid in obj.get("apps", {}):

@@ -193,6 +193,7 @@ class ProtocolClient:
         loop = asyncio.get_running_loop()
         self._two_factor_future = loop.create_future()
         converted_meth = to_EAuthSessionGuardType(method)
+        code = code.strip()
         await self._protobuf_client.update_steamguard_data(client_id, steam_id, code, converted_meth)
         result = await self._two_factor_future
         self._two_factor_future = None
