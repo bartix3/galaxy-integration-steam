@@ -34,6 +34,7 @@ from .protocol.messages.steammessages_auth import (
 
 from .protocol.messages.steammessages_clientserver_userstats import (
     CMsgClientGetUserStatsResponse,
+    CMsgClientGetUserStatsResponseAchievement_Blocks
 )
 
 
@@ -411,8 +412,8 @@ class ProtocolClient:
 
     def _stats_handler(self,
         game_id: str,
-        stats: "CMsgClientGetUserStatsResponse.Stats",
-        achievement_blocks: "CMsgClientGetUserStatsResponse.AchievementBlocks",
+        stats: CMsgClientGetUserStatsResponse.Stats,
+        achievement_blocks: CMsgClientGetUserStatsResponseAchievement_Blocks,
         schema: dict
     ):
         def get_achievement_name(achievements_block_schema: dict, bit_no: int) -> str:

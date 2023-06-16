@@ -180,6 +180,7 @@
     <Folder Include="src\commonWeb\fonts\" />
     <Folder Include="src\commonWeb\fonts\LatoWeb" />
     <Folder Include="src\commonWeb\img" />
+    <Folder Include="src\caches\" />
     <Folder Include="src\steam_network" />
     <Folder Include="src\steam_network\custom_login" />
     <Folder Include="src\steam_network\custom_login\css" />

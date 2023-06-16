@@ -45,6 +45,10 @@ class ProtoCache:
     def update(self, **kwargs):
         pass
 
+    @abstractmethod 
+    def timeout_string() -> str:
+        pass
+
     @property
     def ready(self):
         return self._ready_event.is_set()
@@ -53,7 +57,7 @@ class ProtoCache:
         try:
             await asyncio.wait_for(self._ready_event.wait(), timeout)
         except asyncio.TimeoutError:
-            logger.info("Timed out waiting for games cache to get ready")
+            logger.info(self.timeout_string())
 
     def get(self, key, default=None):
         result = self._info_map.get(key, default)
