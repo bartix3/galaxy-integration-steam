@@ -9,7 +9,10 @@ import pathlib
 
 import logging
 
-from .protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation, EAuthSessionGuardType 
+from .protocol.messages.steammessages_auth_pb2 import CAuthentication_AllowedConfirmation, EAuthSessionGuardType 
+from pprint import pformat
+
+from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
 #a constant. this is the path to the current directory, as a uri. this typically means adding file:/// to the beginning
 DIRNAME = yarl.URL(pathlib.Path(os.path.dirname(os.path.realpath(__file__))).as_uri())
@@ -108,15 +111,16 @@ class TwoFactorMethod(enum.IntEnum):
     EmailCode = 2
     PhoneConfirm = 3
     Unknown = 4 
-    #EmailConfirm = 5 #Does not exist? Likely something Steam thought about implementing and decided not to. if that changes, we can support it.
-
-#def to_TwoFactorMethod(auth_enum : Union[CAuthentication_AllowedConfirmation, EAuthSessionGuardType]) -> TwoFactorMethod:
-#    if (isinstance(auth_enum, CAuthentication_AllowedConfirmation)):
-#        auth_enum = auth_enum.confirmation_type
-#    ret_val, _ = _to_TwoFactorMethod(auth_enum, None)
-#    return ret_val
+    #EmailConfirm = 5 #Does not exist? Likely something Steam thought about implementing and decided not to. if that changes, we can support it. 
     
-def _to_TwoFactorMethod(auth_enum : EAuthSessionGuardType, msg: Optional[str]) -> Tuple[TwoFactorMethod, str]:
+
+def to_TwoFactorMethod(auth_enum : Union[CAuthentication_AllowedConfirmation, EnumTypeWrapper]) -> TwoFactorMethod:
+    if (isinstance(auth_enum, CAuthentication_AllowedConfirmation)):
+        auth_enum = auth_enum.confirmation_type
+    ret_val, _ = _to_TwoFactorMethod(auth_enum, None)
+    return ret_val
+    
+def _to_TwoFactorMethod(auth_enum : EnumTypeWrapper, msg: Optional[str]) -> Tuple[TwoFactorMethod, str]:
     if (auth_enum == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
         return (TwoFactorMethod.Nothing, msg)
     elif (auth_enum == EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode):
@@ -128,7 +132,7 @@ def _to_TwoFactorMethod(auth_enum : EAuthSessionGuardType, msg: Optional[str]) -
     else: #if (k_EAuthSessionGuardType_Unknown, k_EAuthSessionGuardType_LegacyMachineAuth, k_EAuthSessionGuardType_MachineToken, k_EAuthSessionGuardType_EmailConfirmation, or an invalid number
         return (TwoFactorMethod.Unknown, msg)
 
-def to_TwoFactorWithMessage(allowed_confirmation: CAuthentication_AllowedConfirmation) -> Tuple[TwoFactorMethod, str]:
+def to_TwoFactorWithMessage(allowed_confirmation : CAuthentication_AllowedConfirmation) -> Tuple[TwoFactorMethod, str]:
     return _to_TwoFactorMethod(allowed_confirmation.confirmation_type, allowed_confirmation.associated_message)
 
 def to_EAuthSessionGuardType(actionRequired : TwoFactorMethod) -> EAuthSessionGuardType:
@@ -143,7 +147,7 @@ def to_EAuthSessionGuardType(actionRequired : TwoFactorMethod) -> EAuthSessionGu
     else: #if TwoFactorMethod.InvalidAuthData or an invalid number
         return EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown
 
-def to_helpful_string(method: TwoFactorMethod) -> str:
+def to_helpful_string(method:TwoFactorMethod) -> str:
     if (method == TwoFactorMethod.Nothing):
         return "<no two factor method>"
     elif (method == TwoFactorMethod.EmailCode):

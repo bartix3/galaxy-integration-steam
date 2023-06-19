@@ -272,10 +272,12 @@ class SteamNetworkBackend(BackendInterface):
 
     async def _handle_steam_guard_none(self) -> Authentication:
         result = await self._handle_2FA_PollOnce()
-        if (result != UserActionRequired.NoActionRequired):
-            raise UnknownBackendResponse()
-        else:
+        if (result == UserActionRequired.NoActionRequired):
             return Authentication(self._user_info_cache.steam_id, self._user_info_cache.persona_name)
+        elif result == UserActionRequired.NoActionConfirmToken:
+            return await self._finish_auth_process()
+        else:
+            raise UnknownBackendResponse()
 
     async def _handle_steam_guard_check(self, fallback: DisplayUriHelper, is_confirm: bool, **kwargs:str) -> Union[NextStep, Authentication]:
         result = await self._handle_2FA_PollOnce(is_confirm)
