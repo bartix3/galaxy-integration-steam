@@ -18,4 +18,6 @@ output/
 /env1
 /protoc
 *.zip
+
 /protobuf_files/gen
+*.gz
