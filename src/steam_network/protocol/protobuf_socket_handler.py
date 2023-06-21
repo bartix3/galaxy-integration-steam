@@ -1,3 +1,7 @@
+""" protobuf_socket_handler.py 
+Handles all parsing-related code for the model. 
+"""
+
 import asyncio
 from asyncio import Future
 
@@ -159,6 +163,10 @@ class ProtoResult(Generic[T]):
         return self._body
 
 class ProtocolParser:
+    """ Wraps a websocket with all the information we need to successfully send and receive messages to Steam's servers.
+
+    Since this class is designed to be 
+    """
     _PROTO_MASK = 0x80000000
     _ACCOUNT_ID_MASK = 0x0110000100000000
     _IP_OBFUSCATION_MASK = 0x606573A4
@@ -166,12 +174,14 @@ class ProtocolParser:
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
     def __init__(self, socket: WebSocketClientProtocol, queue : asyncio.Queue):
-        self._future_lookup: Dict[int, FutureInfo] = {}
-        self._job_id_iterator: Iterator[int] = count(1) #this is actually clever. A lazy iterator that increments every time you call next.
-        self.confirmed_steam_id : Optional[int] = None
         self._socket : WebSocketClientProtocol = socket
-        self._session_id : Optional[int] = None
         self._queue: asyncio.Queue = queue
+        self._future_lookup: Dict[int, FutureInfo] = {}
+        #this is actually clever. A lazy iterator that increments every time you call next.
+        self._job_id_iterator: Iterator[int] = count(1) 
+        #guarenteed to not be null unless the 
+        self._session_id : Optional[int] = None
+        self.confirmed_steam_id : Optional[int] = None
         pass
 
     async def run(self):

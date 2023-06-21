@@ -2,7 +2,7 @@ import asyncio
 from asyncio.futures import Future
 import ssl
 from contextlib import suppress
-from typing import Callable, Optional, Any, Dict, cast
+from typing import Callable, Optional, Any, Dict, Union, cast, List
 
 import websockets
 from galaxy.api.errors import BackendNotAvailable, BackendTimeout, BackendError, InvalidCredentials, NetworkError, AccessDenied, AuthenticationRequired
@@ -13,6 +13,8 @@ from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from galaxy.api.errors import UnknownBackendResponse
 
+
+from .mvc_classes import ModelAuthError, SteamPublicKey, ModelAuthCredentialResult
 from .protocol.protobuf_socket_handler import ProtocolParser, FutureInfo, ProtoResult
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ class SteamNetworkModel:
                     await cache_task
                     break
             elif (cache_task in done):
+                pass
                 #this should also never close unless it 
 
 
@@ -83,3 +86,8 @@ class SteamNetworkModel:
         """
 
         pass
+
+    async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
+        pass
+
+    async def login_with_credentials(username: str, enciphered_password : str, timestamp : int) -> Union[List[ModelAuthenticationModeData]]

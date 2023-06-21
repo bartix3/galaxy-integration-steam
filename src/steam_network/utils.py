@@ -4,12 +4,15 @@
 
 """
 import platform
+from traceback import format_exc, format_tb
 
 from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
                                BackendTimeout, Banned, InvalidCredentials,
                                NetworkError, TemporaryBlocked, AuthenticationRequired, UnknownError)
 from galaxy.api.types import NextStep
 import galaxy.api.errors
+
+from typing import Optional
 
 from .enums import DisplayUriHelper
 from .protocol.consts import EOSType, EResult
@@ -126,6 +129,9 @@ def translate_error(result: EResult):
         return BackendError(data)
 
     return UnknownError(data)
+
+def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
+    return format_exc(limit) if getError else ''.join(format_tb(limit=limit))
 
 _NEXT_STEP = {
     "window_title": "Login to Steam",

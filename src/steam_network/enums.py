@@ -17,7 +17,7 @@ from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 #a constant. this is the path to the current directory, as a uri. this typically means adding file:/// to the beginning
 DIRNAME = yarl.URL(pathlib.Path(os.path.dirname(os.path.realpath(__file__))).as_uri())
 #another constant. the path to "index.html" relative to the current directory.
-WEBPAGE_RELATIVE_PATH = r'/custom_login/index.html'
+WEBPAGE_RELATIVE_PATH = r'../web/index.html'
 
 logger = logging.getLogger(__name__)
 

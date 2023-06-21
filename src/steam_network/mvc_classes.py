@@ -6,38 +6,42 @@ A collection of classes that the steam network model-view-controller will use to
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum, IntEnum
-from typing import NamedTuple, Dict
+from enum import Enum, IntEnum, StrEnum
+from typing import NamedTuple, Dict, Optional, List
 from rsa import PublicKey
 
 from steam_network.enums import TwoFactorMethod
 
-class LoginState(IntEnum):
-    LOGIN = 0
-    TWO_FACTOR_MAIL = 1
-    TWO_FACTOR_MOBILE = 2
-    TWO_FACTOR_CONFIRMATION = 3
-    ASSHOLE_USER = 4
-    ASSHOLE_ENCIPHERED_PASSWORD = 5
-    INVALID = 6
-
 #implement error enum for use with website. 
-
-#returned by the get rsa call in the model. 
-class SteamPublicKey(NamedTuple):
-    rsa_public_key: PublicKey
-    timestamp: int
 
 #a collection of error codes the auth flow can produce that the view knows how to handle. this typically means sending the right query string parameter to the webpage or things like that.
 #also has a generic unknown value, which just tells the view "i dunno, give them this message i guess"
 class AuthErrorCode(IntEnum):
-    NO_ERROR = 0
-    UNKNOWN_ERROR        = 1 #unexpected errors. we typicall can't recover but we can try i guess.
-    USERNAME_INVALID     = 2 #NOT CURRENTLY USED! Steam always returns a public key even if username invalid.
-    BAD_USER_OR_PASSWORD = 3
-    TWO_FACTOR_INCORRECT = 4
-    TWO_FACTOR_EXPIRED   = 5 #difference between this and did not confirm depends on reason it was called.
-    USER_DID_NOT_CONFIRM = 6 
+    NO_ERROR                  = 0
+    UNKNOWN_ERROR             = 1 #unexpected errors. we typicall can't recover but we can try i guess.
+    USERNAME_INVALID          = 2 #NOT CURRENTLY USED! Steam always returns a public key even if username invalid.
+    MISSING_USERNAME          = 3
+    MISSING_PASSWORD          = 4
+    MISSING_USER_AND_PASSWORD = 5
+    BAD_USER_OR_PASSWORD      = 6
+    TWO_FACTOR_INCORRECT      = 7
+    TWO_FACTOR_EXPIRED        = 8 #difference between this and did not confirm depends on reason it was called.
+    USER_DID_NOT_CONFIRM      = 9 
+
+class ViewPage(NamedTuple):
+    view_name : str
+    end_uri : str
+    end_uri_regex : str
+
+class WebpageView(Enum, ViewPage):
+    #standard login and the version where users will do their own enciphering can be toggled between. So they need to provide both end uris. 
+    LOGIN               = ViewPage("login", 'login_finished', r'.*login_finished.*|.*paranoid_user_finished.*')
+    PARANOID_USER       = ViewPage("login", 'paranoid_user_finished', r'.*login_finished.*|.*paranoid_user_finished.*')
+    TWO_FACTOR_MAIL     = ViewPage("steamguard", 'two_factor_mail_finished', r'.*two_factor_mail_finished.*')
+    TWO_FACTOR_MOBILE   = ViewPage("steamauthenticator", 'two_factor_mobile_finished', '.*two_factor_mobile_finished.*')
+    #mobile confirm can fallback to mail or mobile codes, so the end uri regex needs to support that.
+    TWO_FACTOR_CONFIRM  = ViewPage("steamauthenticator_confirm", "two_factor_confirm_finished", r".*(?:two_factor_confirm_finished|two_factor_mail_finished|two_factor_mobile_finished).*")
+    PARANOID_ENCIPHERED = ViewPage("provide_echiphered", "enciphered_password_finished", r".*enchiphered_password_finished.*")
 
 
 class ModelAuthError(NamedTuple):
@@ -46,16 +50,58 @@ class ModelAuthError(NamedTuple):
     error_code: AuthErrorCode
     steam_error_message: str
 
-class ModelAuthCredentialResult(NamedTuple):
-    pass
+#RSA Result : 
+class SteamPublicKey(NamedTuple):
+    rsa_public_key: PublicKey
+    timestamp: int
 
-class ModelAuthTwoFactorResult(NamedTuple):
-    pass
+#credential results: 
+class ModelAuthCredentialResult():#essentially a named tuple but i needed to sort the list and i can't do that using NamedTuple without some dirty fixes
+    def __init__(self, request_id : bytes, interval : float, allowed_authentication_methods : List[ModelAuthenticationModeData]):
+        self._request_id : bytes = request_id #identifier for this (successful) login attempt
+        self._interval : float = interval #interval on which to ping steam for successful login info. Used to prevent LogOff try another CM.
+        self._allowed_authentication_methods : List[ModelAuthenticationModeData] = sorted(allowed_authentication_methods, \
+            key = ModelAuthCredentialResult._auth_priority, reverse = True)
 
+    @property
+    def request_id(self):
+        return self._request_id
+
+    @property
+    def interval(self):
+        return self._interval
+
+    @property
+    def allowed_authentication_methods(self):
+        return self._allowed_authentication_methods
+
+        #provides a priority for our list based on two factor method
+    @staticmethod
+    def _auth_priority(data : ModelAuthenticationModeData) -> int:
+        method = data.method
+        if (method == TwoFactorMethod.Unknown):
+            return 0
+        elif (method == TwoFactorMethod.Nothing):
+            return 1
+        elif (method == TwoFactorMethod.EmailCode):
+            return 2
+        elif (method == TwoFactorMethod.PhoneCode):
+            return 3
+        elif (method == TwoFactorMethod.PhoneConfirm):
+            return 4
+        else:
+            return -1
+
+#two-factor code results are empty. Therefore, we don't need a class here. The action doesn't really fail until we do our next poll
+
+#poll result data. We need to immediately perform a client login with this data, so it must contain all info the model needs to do so that is not previously available
 class ModelAuthPollResult(NamedTuple):
     username : str
     confirmed_steam_id: int
     refresh_token: str
+
+class ModelAuthClientLoginResult(NamedTuple):
+    pass
 
 
 #Model Auth for token is just essentially a true/false. Since we return a ModelAuthError on false, we can just make that optional. 
@@ -70,3 +116,12 @@ class ModelAuthenticationModeData(NamedTuple):
 class ModelUserAuthData(NamedTuple):
     confirmed_steam_id: int
     persona_name: str
+
+class ControllerAuthData():
+    def __init__(self, client_id: int, username:str, steam_id: int):
+        #self.client_id: int = client_id This is model-specific, and can change on the same user so it should be stored there.
+        self.username: str = username
+        self.steam_id: int = steam_id
+
+
+

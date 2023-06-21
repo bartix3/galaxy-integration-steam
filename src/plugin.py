@@ -20,6 +20,7 @@ import sys
 import webbrowser
 import subprocess
 import time
+import vdf
 
 from typing import Dict, List, Any, AsyncGenerator, Union, Optional
 
@@ -240,6 +241,14 @@ If preparations for one of these functions has been started when the other is ca
         """
         
         SteamPlugin._steam_command("launch", game_id)
+
+    @staticmethod
+    def _parallel_get_size(id : str, manifest_path : str) -> Optional[int]:
+        with open(manifest_path, encoding="utf-8", errors="replace") as vdf_file:
+            data = vdf.loads()
+
+    async def _parallel_prep_local_size(game_ids: List[str]) -> Dict[str, Optional[int]]:
+
 
 
     async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, str]:

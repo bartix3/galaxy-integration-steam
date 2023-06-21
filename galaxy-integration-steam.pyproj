@@ -22,6 +22,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include=".gitignore" />
+    <Content Include="auto-copy-mac.command" />
+    <Content Include="auto-copy-windows.bat" />
     <Content Include="current_version.json" />
     <Content Include="galaxy-integration-steam.pyproj" />
     <Content Include="Install Certificates.command" />
@@ -50,17 +52,16 @@
     <Content Include="requirements\app.txt" />
     <Content Include="requirements\dev.txt" />
     <Content Include="requirements\install.txt" />
-    <Content Include="src\commonWeb\css\common.css" />
-    <Content Include="src\commonWeb\fonts\LatoWeb\LatoWeb-Light.ttf" />
-    <Content Include="src\commonWeb\fonts\LatoWeb\LatoWeb-Regular.ttf" />
-    <Content Include="src\commonWeb\fonts\LatoWeb\LatoWeb-Semibold.ttf" />
-    <Content Include="src\commonWeb\img\icon-error.svg" />
-    <Content Include="src\commonWeb\img\icon-show.svg" />
-    <Content Include="src\commonWeb\img\icon-steam-logo.svg" />
-    <Content Include="src\commonWeb\img\icon-warning.svg" />
+    <Content Include="src\steam_network\web\css\style.css" />
+    <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Light.ttf" />
+    <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Regular.ttf" />
+    <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Semibold.ttf" />
+    <Content Include="src\steam_network\web\img\icon-error.svg" />
+    <Content Include="src\steam_network\web\img\icon-show.svg" />
+    <Content Include="src\steam_network\web\img\icon-steam-logo.svg" />
+    <Content Include="src\steam_network\web\img\icon-warning.svg" />
     <Content Include="src\manifest.json" />
-    <Content Include="src\steam_network\custom_login\css\style.css" />
-    <Content Include="src\steam_network\custom_login\index.html" />
+    <Content Include="src\steam_network\web\index.html" />
     <Content Include="tests\appmanifest_386360.acf" />
     <Content Include="tests\appmanifest_787480.acf" />
     <Content Include="tests\appmanifest_970570.acf" />
@@ -73,7 +74,6 @@
     <Compile Include="src\client.py" />
     <Compile Include="src\plugin.py" />
     <Compile Include="src\registry_monitor.py" />
-    <Compile Include="src\steam_network\authentication_data.py" />
     <Compile Include="src\steam_network\caches\cache_proto.py" />
     <Compile Include="src\steam_network\caches\__init__.py" />
     <Compile Include="src\steam_network\cache_handler.py" />
@@ -82,6 +82,7 @@
     <Compile Include="src\steam_network\caches\friends_cache.py" />
     <Compile Include="src\steam_network\caches\games_cache.py" />
     <Compile Include="src\steam_network\caches\local_machine_cache.py" />
+    <Compile Include="src\steam_network\next_step_settings.py" />
     <Compile Include="src\steam_network\presence.py" />
     <Compile Include="src\steam_network\protocol\consts.py" />
     <Compile Include="src\steam_network\protocol\messages\encrypted_app_ticket.py" />
@@ -128,14 +129,6 @@
     <Compile Include="task_helper.py" />
     <Compile Include="tests\async_mock.py" />
     <Compile Include="tests\conftest.py" />
-    <Compile Include="tests\tests_public_profiles\conftest.py" />
-    <Compile Include="tests\tests_public_profiles\test_achievements.py" />
-    <Compile Include="tests\tests_public_profiles\test_authentication__public_profile.py" />
-    <Compile Include="tests\tests_public_profiles\test_friends.py" />
-    <Compile Include="tests\tests_public_profiles\test_game_time.py" />
-    <Compile Include="tests\tests_public_profiles\test_lost_authentication.py" />
-    <Compile Include="tests\tests_public_profiles\test_owned_games.py" />
-    <Compile Include="tests\tests_public_profiles\__init__.py" />
     <Compile Include="tests\tests_steam_network\conftest.py" />
     <Compile Include="tests\tests_steam_network\test_achievements.py" />
     <Compile Include="tests\tests_steam_network\test_authentication.py" />
@@ -168,19 +161,16 @@
     <Folder Include="protobuf_files\proto\" />
     <Folder Include="requirements\" />
     <Folder Include="src" />
-    <Folder Include="src\commonWeb\" />
-    <Folder Include="src\commonWeb\css" />
-    <Folder Include="src\commonWeb\fonts\" />
-    <Folder Include="src\commonWeb\fonts\LatoWeb" />
-    <Folder Include="src\commonWeb\img" />
+    <Folder Include="src\steam_network\web\" />
+    <Folder Include="src\steam_network\web\css\" />
+    <Folder Include="src\steam_network\web\fonts\" />
+    <Folder Include="src\steam_network\web\fonts\LatoWeb\" />
+    <Folder Include="src\steam_network\web\img\" />
     <Folder Include="src\steam_network" />
-    <Folder Include="src\steam_network\custom_login" />
-    <Folder Include="src\steam_network\custom_login\css" />
     <Folder Include="src\steam_network\caches\" />
     <Folder Include="src\steam_network\protocol" />
     <Folder Include="src\steam_network\protocol\messages\" />
     <Folder Include="tests" />
-    <Folder Include="tests\tests_public_profiles" />
     <Folder Include="tests\tests_steam_network" />
   </ItemGroup>
   <ItemGroup>
