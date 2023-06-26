@@ -280,7 +280,7 @@ class WebSocketClient:
 
             elif (mode == AuthCall.UPDATE_TWO_FACTOR):
                 code : Optional[UserActionRequired] = response.get('two-factor-code', None)
-                method : Optional[UserActionRequired] = response.get('two-factor-method', None)
+                method : Optional[TwoFactorMethod] = response.get('two-factor-method', None)
                 if (self._steam_polling_data is None or not self._steam_polling_data.has_valid_confirmation_method() or not code or not method):
                     ret_code = UserActionRequired.InvalidAuthData
                 else:

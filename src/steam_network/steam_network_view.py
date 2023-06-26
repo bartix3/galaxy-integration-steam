@@ -4,14 +4,16 @@ from pathlib import Path
 
 from urllib.parse import urlencode, urlsplit, parse_qs
 
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, List
 from galaxy.api.types import NextStep
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import PublicKey
 
+from steam_network.enums import TwoFactorMethod
+
 from .utils import get_traceback
 
-from .mvc_classes import LoginState, ModelAuthError, AuthErrorCode, WebpageView
+from .mvc_classes import ModelAuthError, AuthErrorCode, ModelAuthenticationModeData, WebpageView
 from .next_step_settings import NextStepSettings
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ class SteamNetworkView:
         """
         return (''.join([i if ord(i) < 128 else '' for i in data]))[:64]
 
-    def get_login_results(self, credentials: Dict[str, str]) -> Union[Tuple[str, str], NextStep]:
+    def retrieve_data_regular_login(self, credentials: Dict[str, str]) -> Union[Tuple[str, str], NextStep]:
         """ Parse the credentials returned from the Galaxy Client login webpage and return the results.
         
         Either returns the data necessary to continue the login process in the controller, or a NextStep object if that data is unavailable.
@@ -74,10 +76,24 @@ class SteamNetworkView:
         pws = self._sanitize_string(params["password"][0])
         return (user, pws)
 
-    def prepare_two_factor_display(self, ) -> NextStep:
-        pass
+    def login_success_has_2fa(self, auth_modes: List[ModelAuthenticationModeData]) -> NextStep:
+        Dict[str, str] = bonus_data = {}
+
+        view: WebpageView = WebpageView.from_TwoFactorMethod(auth_modes[0].method)
+
+        if view is None:
+            raise UnknownBackendResponse()
+        elif view == WebpageView.TWO_FACTOR_CONFIRM and len(auth_modes) > 1:
+                bonus_data["fallback_method"] = auth_modes[1].method
+                bonus_data["fallback_message"] = auth_modes[1].associated_message
+
+        bonus_data["auth_message"] = auth_modes[0].associated_message
+        start_uri = self._build_start_uri(view.view_name, **bonus_data)
+        return self._build_NextStep(start_uri, view.end_uri_regex)
+        
 
     def login_failed(self, error: Optional[ModelAuthError]) -> NextStep:
+
         err_msg : Dict[str, str] = {"errored" : "true"}
         if (error is not None):
             if (error.error_code == AuthErrorCode.BAD_USER_OR_PASSWORD):
@@ -94,8 +110,8 @@ class SteamNetworkView:
 
         start_uri = self._build_start_uri(WebpageView.LOGIN.view_name, **err_msg)
         return self._build_NextStep(start_uri, WebpageView.LOGIN.end_uri_regex)
-
-    def get_username_only_results(self, credentials : Dict[str, str]) -> Union[NextStep, str]:
+    
+    def retrieve_data_paranoid_username(self, credentials : Dict[str, str]) -> Union[NextStep, str]:
         """ Handles when the user interface for the login page finishes and the user has expressly stated they don't trust us with their password. 
 
         Returns either the username, or a NextStep instance if they didn't entrust us with that information, either. 
@@ -104,20 +120,21 @@ class SteamNetworkView:
         params = parse_qs(parsed_url.query)
         if ("username" not in params):
             logger.info("Paranoid username is missing. Displaying the special login page with error message.")
-            return self.username_only_failed()
+            return self.paranoid_username_failed()
         else:
             return params["username"]
 
-    def username_only_failed(self) -> NextStep:
+    def paranoid_username_success(self, username: str, key: PublicKey, timestamp: int) -> NextStep:
+        bonus_data : Dict[str, str] = {"username" : username, "modulus" : str(key.n), "exponent" : str(key.e), "timestamp" : timestamp}
+        
+        start_uri = self._build_start_uri(WebpageView.PARANOID_ENCIPHERED.view_name, **bonus_data)
+        return self._build_NextStep(start_uri, WebpageView.PARANOID_ENCIPHERED.end_uri_regex)
+
+    def paranoid_username_failed(self) -> NextStep:
         start_uri = self._build_start_uri(WebpageView.PARANOID_USER.view_name, login_failure="missing_username")
         return self._build_NextStep(start_uri, WebpageView.PARANOID_USER.end_uri_regex)
 
-    def prepare_asshole_encipher_page(self) -> NextStep:
-        pass
-
-
-
-    def on_login_page_post_rsa(self, credentials: Dict[str, str], key : PublicKey) -> Union[NextStep, bytes]:
+    def retrieve_data_paranoid_pt2(self, credentials: Dict[str, str], key : PublicKey) -> Union[NextStep, Tuple[str,bytes, int]]:
         """Handles the second part of user interaction on the login page, providing an RSA Public Key to encipher any sensitive data. 
 
         The RSA Key provided is obtained directly from Steam, any enciphered data cannot be deciphered by anyone but Steam.
@@ -126,22 +143,88 @@ class SteamNetworkView:
 
         Returns either the enciphered password as an array of bytes, or a NextStep object if the format was not as we expected. 
         """
-        pass
-
-    def on_asshole_login_post_rsa(self, credentials: Dict[str, str]) -> bytes:
-        """Handles the second part of user interaction for users that refuse to enter their password in our webpage out of "security concerns"
-
-        No validation is done on their input string. the string is expected to be in hexidecimal format. For python programs, this is <bytes>.hex(). spaces between each hex byte value is allowed.
-        """
         return bytes.fromhex(credentials["enciphered_password"])
 
-    def on_two_factor_mobile_finished(self, credentials : Dict[str, str]) -> Union[NextStep, str]:
-        pass
-
-    def on_two_factor_email_finished(self, credentials : Dict[str, str]) -> Union[NextStep, str]:
-        pass
-
+    #paranoid part 2 success is the same as regular login success so that is called instead. 
     
+    def paranoid_pt2_failed(self, error: Optional[ModelAuthError]) -> NextStep:
+        err_msg : Dict[str, str] = {"errored" : "true"}
+        if (error is not None):
+            if (error.error_code == AuthErrorCode.BAD_USER_OR_PASSWORD):
+                err_msg["login_failure"] = "bad_credentials"
+            elif (error.error_code == AuthErrorCode.NO_ERROR):
+                logger.warning("Manual encipher login failed but the error code was no error. Will fallback to rsa login, but printing trace anyway\n" + get_traceback(False))
+            #all remaining cases are unexpected and therefore ignored.
+            else:
+                logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
+
+        start_uri = self._build_start_uri(WebpageView.PARANOID_USER.view_name, **err_msg)
+        return self._build_NextStep(start_uri, WebpageView.PARANOID_USER.end_uri_regex)
+
+    def retrieve_data_two_factor(self, credentials : Dict[str, str], auth_modes: List[ModelAuthenticationModeData]) -> Union[NextStep, str]:
+        params = parse_qs(urlsplit(credentials["end_uri"]).query)
+        if ("code" not in params):
+            return self.two_factor_code_failed(auth_modes, ModelAuthError(AuthErrorCode.TWO_FACTOR_MISSING, ""))
+        else:
+            return params["code"][0].strip()
+    
+    #two factor success doesn't display a page.
+
+    def two_factor_code_failed(self, auth_modes: List[ModelAuthenticationModeData], error: Optional[ModelAuthError]):
+        err_msg : Dict[str, str] = {"errored" : "true"}
+        if (error is not None):
+            if (error.error_code == AuthErrorCode.TWO_FACTOR_MISSING):
+                err_msg["two_factor_reason"] = "missing"
+            elif (error.error_code == AuthErrorCode.TWO_FACTOR_INCORRECT):
+                err_msg["two_factor_reason"] = "incorrect"
+            elif (error.error_code == AuthErrorCode.NO_ERROR):
+                logger.warning("Manual encipher login failed but the error code was no error. Will fallback to rsa login, but printing trace anyway\n" + get_traceback(False))
+            #all remaining cases are unexpected and therefore ignored.
+            else:
+                logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
+
+        err_msg["auth_message"] = auth_modes[0].associated_message
+        view = WebpageView.from_TwoFactorMethod(auth_modes[0].method)
+        if (view is None):
+            raise UnknownBackendResponse()
+
+        start_uri = self._build_start_uri(view.view_name, **err_msg)
+        return self._build_NextStep(start_uri, view.end_uri_regex)
+
+    #no data to retrieve on confirmation page.
+
+    #no page to display for confirm success.
+
+    def mobile_confirmation_failed(self, auth_modes : List[ModelAuthenticationModeData], error: Optional[ModelAuthError]) -> NextStep:
+        err_msg : Dict[str, str] = {"errored" : "true"}
+        if (error is not None):
+            if (error.error_code == AuthErrorCode.USER_DID_NOT_CONFIRM):
+                err_msg["confirm_reason"] = "not_confirmed"
+            elif (error.error_code == AuthErrorCode.NO_ERROR):
+                logger.warning("Manual encipher login failed but the error code was no error. Will fallback to rsa login, but printing trace anyway\n" + get_traceback(False))
+            #all remaining cases are unexpected and therefore ignored.
+            else:
+                logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
+
+        if (len(auth_modes) > 1):
+            fallback_view = WebpageView.from_TwoFactorMethod(auth_modes[1].method)
+            if (fallback_view is not None and fallback_view != WebpageView.TWO_FACTOR_CONFIRM):
+                err_msg["fallback_method"] = auth_modes[1].method
+                err_msg["fallback_message"] = auth_modes[1].associated_message
+
+        err_msg["auth_message"] = auth_modes[0].associated_message
+        start_uri = self._build_start_uri(WebpageView.TWO_FACTOR_CONFIRM.view_name, **err_msg)
+        return self._build_NextStep(start_uri, WebpageView.TWO_FACTOR_CONFIRM.end_uri_regex)
+
+    #no page for token login. 
+
+    #login page as a fallback. Also used for login if logging in via stored credentials fails or if the stored credentials are invalid.
+    def fallback_login_page(self, is_fallback = True) -> NextStep:
+        err_msg = {"errored": "true"} if is_fallback else {}
+
+        start_uri = self._build_start_uri(WebpageView.LOGIN.view_name, **err_msg)
+        return self._build_NextStep(start_uri, WebpageView.LOGIN.end_uri_regex)
+
 
     def _build_start_uri(self, view_name: str, ** kwargs: str) -> str:
         #we used urlencode to do double duty: combine all our url params with the & delimeter, and keep the strings from containing any illegal html characters.

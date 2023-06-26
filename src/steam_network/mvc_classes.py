@@ -24,9 +24,10 @@ class AuthErrorCode(IntEnum):
     MISSING_PASSWORD          = 4
     MISSING_USER_AND_PASSWORD = 5
     BAD_USER_OR_PASSWORD      = 6
-    TWO_FACTOR_INCORRECT      = 7
-    TWO_FACTOR_EXPIRED        = 8 #difference between this and did not confirm depends on reason it was called.
-    USER_DID_NOT_CONFIRM      = 9 
+    TWO_FACTOR_MISSING        = 7
+    TWO_FACTOR_INCORRECT      = 8
+    TWO_FACTOR_EXPIRED        = 9 #difference between this and did not confirm depends on reason it was called.
+    USER_DID_NOT_CONFIRM      = 10 
 
 class ViewPage(NamedTuple):
     view_name : str
@@ -43,6 +44,17 @@ class WebpageView(Enum, ViewPage):
     TWO_FACTOR_CONFIRM  = ViewPage("steamauthenticator_confirm", "two_factor_confirm_finished", r".*(?:two_factor_confirm_finished|two_factor_mail_finished|two_factor_mobile_finished).*")
     PARANOID_ENCIPHERED = ViewPage("provide_echiphered", "enciphered_password_finished", r".*enchiphered_password_finished.*")
 
+    @staticmethod 
+    def from_TwoFactorMethod(method: TwoFactorMethod) -> Optional[WebpageView]:
+        if (method == TwoFactorMethod.PhoneCode):
+            return WebpageView.TWO_FACTOR_MOBILE
+        elif (method == TwoFactorMethod.EmailCode):
+            return WebpageView.TWO_FACTOR_MAIL
+        elif (method == TwoFactorMethod.PhoneConfirm):
+            return WebpageView.TWO_FACTOR_CONFIRM
+        else: #if (method == TwoFactorMethod.Nothing or method == TwoFactorMethod.Unknown or method == <illegal value>)
+            return None
+
 
 class ModelAuthError(NamedTuple):
     """ an error from the model during authentication that the view can use to populate the webpage with error messages. 
@@ -50,18 +62,36 @@ class ModelAuthError(NamedTuple):
     error_code: AuthErrorCode
     steam_error_message: str
 
+
+class ModelAuthPollError(ModelAuthError):
+    new_client_id: int
+
 #RSA Result : 
 class SteamPublicKey(NamedTuple):
     rsa_public_key: PublicKey
     timestamp: int
 
 #credential results: 
-class ModelAuthCredentialResult():#essentially a named tuple but i needed to sort the list and i can't do that using NamedTuple without some dirty fixes
-    def __init__(self, request_id : bytes, interval : float, allowed_authentication_methods : List[ModelAuthenticationModeData]):
+class ModelAuthCredentialData():
+    """
+    Data obtained during the credentials login phase that is used in subsequent 2FA calls.
+
+    essentially a named tuple but the list needs to be sorted, and client id is mutable (subsequent polls can update this value).
+    """
+    def __init__(self, client_id: int, request_id : bytes, interval : float, allowed_authentication_methods : List[ModelAuthenticationModeData]):
+        self._client_id : int = client_id
         self._request_id : bytes = request_id #identifier for this (successful) login attempt
         self._interval : float = interval #interval on which to ping steam for successful login info. Used to prevent LogOff try another CM.
         self._allowed_authentication_methods : List[ModelAuthenticationModeData] = sorted(allowed_authentication_methods, \
-            key = ModelAuthCredentialResult._auth_priority, reverse = True)
+            key = ModelAuthCredentialData._auth_priority, reverse = True)
+
+    @property
+    def client_id(self):
+        return self._client_id
+
+    @client_id.setter
+    def client_id(self, value: int):
+        self._client_id = value
 
     @property
     def request_id(self):
@@ -73,7 +103,7 @@ class ModelAuthCredentialResult():#essentially a named tuple but i needed to sor
 
     @property
     def allowed_authentication_methods(self):
-        return self._allowed_authentication_methods
+        return self._allowed_authentication_methods.copy()
 
         #provides a priority for our list based on two factor method
     @staticmethod
@@ -96,9 +126,11 @@ class ModelAuthCredentialResult():#essentially a named tuple but i needed to sor
 
 #poll result data. We need to immediately perform a client login with this data, so it must contain all info the model needs to do so that is not previously available
 class ModelAuthPollResult(NamedTuple):
-    username : str
+    client_id: int
+    account_name: str
     confirmed_steam_id: int
     refresh_token: str
+
 
 class ModelAuthClientLoginResult(NamedTuple):
     pass
@@ -118,7 +150,8 @@ class ModelUserAuthData(NamedTuple):
     persona_name: str
 
 class ControllerAuthData():
-    def __init__(self, client_id: int, username:str, steam_id: int):
+    def __init__(self, username:str, steam_id: int):
+    #def __init__(self, client_id: int, username:str, steam_id: int):
         #self.client_id: int = client_id This is model-specific, and can change on the same user so it should be stored there.
         self.username: str = username
         self.steam_id: int = steam_id

@@ -14,7 +14,7 @@ from websockets.exceptions import ConnectionClosed, ConnectionClosedError, Conne
 from galaxy.api.errors import UnknownBackendResponse
 
 
-from .mvc_classes import ModelAuthError, SteamPublicKey, ModelAuthCredentialResult
+from .mvc_classes import ModelAuthError, SteamPublicKey, ModelAuthCredentialData, ModelAuthPollResult, ModelAuthClientLoginResult, ModelAuthPollError
 from .protocol.protobuf_socket_handler import ProtocolParser, FutureInfo, ProtoResult
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,12 @@ class SteamNetworkModel:
         self._queue : asyncio.Queue = asyncio.Queue()
         self._websocket : WebSocketClientProtocol = None
         self._parser : ProtocolParser = None
+        self._server_cell_id = 0
+
+
+    @property
+    def server_cell_id(self):
+        return self._server_cell_id
 
     async def run(self):
         #ideally, this function should never loop. During normal execution, the loop never occurs - we run it once, and this task is cancelled when the plugin closes. 
@@ -90,4 +96,15 @@ class SteamNetworkModel:
     async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
         pass
 
-    async def login_with_credentials(username: str, enciphered_password : str, timestamp : int) -> Union[List[ModelAuthenticationModeData]]
+    async def login_with_credentials(username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
+        pass
+
+    async def update_two_factor(self, request_id: int, steam_id: int, code: str, is_email: bool) -> Optional[ModelAuthError]:
+        pass
+
+    async def check_authentication_status(request_id: int) -> Union[ModelAuthPollResult, ModelAuthPollError]:
+        pass
+
+    #if this fails, we don't care why - it either means our old stored credentials were bad and we just need to renew them, or despite getting a refresh token it's somehow invalid. The latter is not recoverable.
+    async def steam_client_login(account_name: str, steam_id: int, access_token: str, os_value: int) -> Optional[ModelAuthClientLoginResult]:
+        pass 
