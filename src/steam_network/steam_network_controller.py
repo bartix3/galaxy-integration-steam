@@ -5,13 +5,13 @@ from galaxy.api.types import Authentication, NextStep, Game, Achievement, Subscr
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import encrypt
 
-from .enums import TwoFactorMethod
-
 from .user_credential_data import UserCredentialData
 from .steam_network_model import SteamNetworkModel
 from .steam_network_view import SteamNetworkView
-from .mvc_classes import ControllerAuthData, ModelAuthError, ModelAuthenticationModeData, ModelUserAuthData, SteamPublicKey, ModelAuthPollResult, ModelAuthCredentialData, WebpageView, ModelAuthPollError
+from .mvc_classes import ControllerAuthData, ModelAuthError, ModelUserAuthData, SteamPublicKey, ModelAuthPollResult, ModelAuthCredentialData, WebpageView, ModelAuthPollError
 from .utils import get_os
+
+from .protocol.messages.steammessages_auth import EAuthSessionGuardType
 
 logger = logging.getLogger(__name__)
 
@@ -147,10 +147,10 @@ class SteamNetworkController:
             self._two_factor_info = cast(ModelAuthCredentialData, two_factor_data_or_error)
 
             auth_methods = self._two_factor_info.allowed_authentication_methods
-            if not auth_methods or auth_methods[0].method == TwoFactorMethod.Unknown:
+            if not auth_methods or not auth_methods[0] or auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown:
                 logger.exception("Login appeared successful, but no two factor methods were returned or an the return method was unknown. Login therefore failed.")
                 raise UnknownBackendResponse()
-            elif (auth_methods[0] == TwoFactorMethod.Nothing):
+            elif (auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
                 logger.info("User does not require SteamGuard for authentication. Attempting to confirm this.")
                 return await self._handle_steam_guard_none()
             else:

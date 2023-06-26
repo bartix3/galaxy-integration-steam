@@ -10,8 +10,7 @@ from enum import Enum, IntEnum, StrEnum
 from typing import NamedTuple, Dict, Optional, List
 from rsa import PublicKey
 
-from steam_network.enums import TwoFactorMethod
-
+from .protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation, EAuthSessionGuardType
 #implement error enum for use with website. 
 
 #a collection of error codes the auth flow can produce that the view knows how to handle. this typically means sending the right query string parameter to the webpage or things like that.
@@ -44,15 +43,20 @@ class WebpageView(Enum, ViewPage):
     TWO_FACTOR_CONFIRM  = ViewPage("steamauthenticator_confirm", "two_factor_confirm_finished", r".*(?:two_factor_confirm_finished|two_factor_mail_finished|two_factor_mobile_finished).*")
     PARANOID_ENCIPHERED = ViewPage("provide_echiphered", "enciphered_password_finished", r".*enchiphered_password_finished.*")
 
-    @staticmethod 
-    def from_TwoFactorMethod(method: TwoFactorMethod) -> Optional[WebpageView]:
-        if (method == TwoFactorMethod.PhoneCode):
-            return WebpageView.TWO_FACTOR_MOBILE
-        elif (method == TwoFactorMethod.EmailCode):
+    @staticmethod
+    def from_CAuthentication_AllowedConfirmation(guard_type: CAuthentication_AllowedConfirmation) -> WebpageView:
+        return WebpageView.from_EAuthSessionGuardType(guard_type.confirmation_type)
+
+    @staticmethod
+    def from_EAuthSessionGuardType(method: EAuthSessionGuardType) -> WebpageView:
+        
+        if (method == EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode):
             return WebpageView.TWO_FACTOR_MAIL
-        elif (method == TwoFactorMethod.PhoneConfirm):
+        elif (method == EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode):
+            return WebpageView.TWO_FACTOR_MOBILE
+        elif (method == EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceConfirmation):
             return WebpageView.TWO_FACTOR_CONFIRM
-        else: #if (method == TwoFactorMethod.Nothing or method == TwoFactorMethod.Unknown or method == <illegal value>)
+        else: #if (method == EAuthSessionGuardType.k_EAuthSessionGuardType_None): #or invalid
             return None
 
 
@@ -78,11 +82,11 @@ class ModelAuthCredentialData():
 
     essentially a named tuple but the list needs to be sorted, and client id is mutable (subsequent polls can update this value).
     """
-    def __init__(self, client_id: int, request_id : bytes, interval : float, allowed_authentication_methods : List[ModelAuthenticationModeData]):
+    def __init__(self, client_id: int, request_id : bytes, interval : float, allowed_authentication_methods : List[CAuthentication_AllowedConfirmation]):
         self._client_id : int = client_id
         self._request_id : bytes = request_id #identifier for this (successful) login attempt
         self._interval : float = interval #interval on which to ping steam for successful login info. Used to prevent LogOff try another CM.
-        self._allowed_authentication_methods : List[ModelAuthenticationModeData] = sorted(allowed_authentication_methods, \
+        self._allowed_authentication_methods : List[CAuthentication_AllowedConfirmation] = sorted(filter(ModelAuthCredentialData._allowed_items, allowed_authentication_methods), \
             key = ModelAuthCredentialData._auth_priority, reverse = True)
 
     @property
@@ -107,17 +111,23 @@ class ModelAuthCredentialData():
 
         #provides a priority for our list based on two factor method
     @staticmethod
-    def _auth_priority(data : ModelAuthenticationModeData) -> int:
-        method = data.method
-        if (method == TwoFactorMethod.Unknown):
-            return 0
-        elif (method == TwoFactorMethod.Nothing):
+    def _allowed_items(data : CAuthentication_AllowedConfirmation) -> bool:
+        return data.confirmation_type in [
+            EAuthSessionGuardType.k_EAuthSessionGuardType_None,
+            EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode, 
+            EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode,
+            EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceConfirmation, 
+        ]
+    @staticmethod
+    def _auth_priority(data : CAuthentication_AllowedConfirmation) -> int:
+        method = data.confirmation_type
+        if (method == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
             return 1
-        elif (method == TwoFactorMethod.EmailCode):
+        elif (method == EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode):
             return 2
-        elif (method == TwoFactorMethod.PhoneCode):
+        elif (method == EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode):
             return 3
-        elif (method == TwoFactorMethod.PhoneConfirm):
+        elif (method == EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceConfirmation):
             return 4
         else:
             return -1
@@ -137,14 +147,6 @@ class ModelAuthClientLoginResult(NamedTuple):
 
 
 #Model Auth for token is just essentially a true/false. Since we return a ModelAuthError on false, we can just make that optional. 
-
-
-
-
-class ModelAuthenticationModeData(NamedTuple):
-    method: TwoFactorMethod
-    associated_message: str
-
 class ModelUserAuthData(NamedTuple):
     confirmed_steam_id: int
     persona_name: str

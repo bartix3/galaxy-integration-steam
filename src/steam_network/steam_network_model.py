@@ -4,7 +4,6 @@ import ssl
 from contextlib import suppress
 from typing import Callable, Optional, Any, Dict, Union, cast, List
 
-import websockets
 from galaxy.api.errors import BackendNotAvailable, BackendTimeout, BackendError, InvalidCredentials, NetworkError, AccessDenied, AuthenticationRequired
 
 import logging

@@ -9,11 +9,10 @@ from galaxy.api.types import NextStep
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import PublicKey
 
-from steam_network.enums import TwoFactorMethod
-
+from protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation
+from .mvc_classes import ModelAuthError, AuthErrorCode, WebpageView
 from .utils import get_traceback
 
-from .mvc_classes import ModelAuthError, AuthErrorCode, ModelAuthenticationModeData, WebpageView
 from .next_step_settings import NextStepSettings
 logger = logging.getLogger(__name__)
 
@@ -76,16 +75,18 @@ class SteamNetworkView:
         pws = self._sanitize_string(params["password"][0])
         return (user, pws)
 
-    def login_success_has_2fa(self, auth_modes: List[ModelAuthenticationModeData]) -> NextStep:
+    def login_success_has_2fa(self, auth_modes: List[CAuthentication_AllowedConfirmation]) -> NextStep:
         Dict[str, str] = bonus_data = {}
 
-        view: WebpageView = WebpageView.from_TwoFactorMethod(auth_modes[0].method)
+        view: WebpageView = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
 
         if view is None:
             raise UnknownBackendResponse()
         elif view == WebpageView.TWO_FACTOR_CONFIRM and len(auth_modes) > 1:
-                bonus_data["fallback_method"] = auth_modes[1].method
-                bonus_data["fallback_message"] = auth_modes[1].associated_message
+            fallback_view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[1])
+
+            bonus_data["fallback_method"] = fallback_view.view_name
+            bonus_data["fallback_message"] = auth_modes[1].associated_message
 
         bonus_data["auth_message"] = auth_modes[0].associated_message
         start_uri = self._build_start_uri(view.view_name, **bonus_data)
@@ -161,7 +162,7 @@ class SteamNetworkView:
         start_uri = self._build_start_uri(WebpageView.PARANOID_USER.view_name, **err_msg)
         return self._build_NextStep(start_uri, WebpageView.PARANOID_USER.end_uri_regex)
 
-    def retrieve_data_two_factor(self, credentials : Dict[str, str], auth_modes: List[ModelAuthenticationModeData]) -> Union[NextStep, str]:
+    def retrieve_data_two_factor(self, credentials : Dict[str, str], auth_modes: List[CAuthentication_AllowedConfirmation]) -> Union[NextStep, str]:
         params = parse_qs(urlsplit(credentials["end_uri"]).query)
         if ("code" not in params):
             return self.two_factor_code_failed(auth_modes, ModelAuthError(AuthErrorCode.TWO_FACTOR_MISSING, ""))
@@ -170,7 +171,7 @@ class SteamNetworkView:
     
     #two factor success doesn't display a page.
 
-    def two_factor_code_failed(self, auth_modes: List[ModelAuthenticationModeData], error: Optional[ModelAuthError]):
+    def two_factor_code_failed(self, auth_modes: List[CAuthentication_AllowedConfirmation], error: Optional[ModelAuthError]):
         err_msg : Dict[str, str] = {"errored" : "true"}
         if (error is not None):
             if (error.error_code == AuthErrorCode.TWO_FACTOR_MISSING):
@@ -184,7 +185,7 @@ class SteamNetworkView:
                 logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
 
         err_msg["auth_message"] = auth_modes[0].associated_message
-        view = WebpageView.from_TwoFactorMethod(auth_modes[0].method)
+        view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
         if (view is None):
             raise UnknownBackendResponse()
 
@@ -195,7 +196,7 @@ class SteamNetworkView:
 
     #no page to display for confirm success.
 
-    def mobile_confirmation_failed(self, auth_modes : List[ModelAuthenticationModeData], error: Optional[ModelAuthError]) -> NextStep:
+    def mobile_confirmation_failed(self, auth_modes : List[CAuthentication_AllowedConfirmation], error: Optional[ModelAuthError]) -> NextStep:
         err_msg : Dict[str, str] = {"errored" : "true"}
         if (error is not None):
             if (error.error_code == AuthErrorCode.USER_DID_NOT_CONFIRM):
@@ -207,9 +208,9 @@ class SteamNetworkView:
                 logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
 
         if (len(auth_modes) > 1):
-            fallback_view = WebpageView.from_TwoFactorMethod(auth_modes[1].method)
+            fallback_view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[1])
             if (fallback_view is not None and fallback_view != WebpageView.TWO_FACTOR_CONFIRM):
-                err_msg["fallback_method"] = auth_modes[1].method
+                err_msg["fallback_method"] = fallback_view.view_name
                 err_msg["fallback_message"] = auth_modes[1].associated_message
 
         err_msg["auth_message"] = auth_modes[0].associated_message
