@@ -9,7 +9,7 @@ from galaxy.api.types import NextStep
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import PublicKey
 
-from protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation
+from .protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation
 from .mvc_classes import ModelAuthError, AuthErrorCode, WebpageView
 from .utils import get_traceback
 
@@ -21,8 +21,6 @@ class SteamNetworkView:
 
     This involves parsing the get strings we receive when a page finishes, as well as setting any error params and so on. Most of the work is done in HTML and JS, but doing this using helpers was getting unwieldy. 
     """
-    pass
-
     #I'm aware i can do this with the divide operator but that's confusing imo. Unless you know how that works it makes zero sense. 'joinpath' is explicit and therefore not 'magic'
     WEB_PAGE = Path(__file__).parent.joinpath("web", "index.html").as_uri()
 

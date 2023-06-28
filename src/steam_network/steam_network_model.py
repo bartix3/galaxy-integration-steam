@@ -13,12 +13,20 @@ from websockets.exceptions import ConnectionClosed, ConnectionClosedError, Conne
 from galaxy.api.errors import UnknownBackendResponse
 
 
+from datetime import datetime, timezone
+
 from .mvc_classes import ModelAuthError, SteamPublicKey, ModelAuthCredentialData, ModelAuthPollResult, ModelAuthClientLoginResult, ModelAuthPollError
 from .protocol.protobuf_socket_handler import ProtocolParser, FutureInfo, ProtoResult
 
 logger = logging.getLogger(__name__)
 
 logging.getLogger("websockets").setLevel(logging.WARNING)
+
+"""TESTING IMPORTS REMOVE WHEN IMPLEMENTED"""
+
+from rsa import newkeys
+
+""" END TEST IMPORTS """
 
 
 
@@ -93,7 +101,9 @@ class SteamNetworkModel:
         pass
 
     async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
-        pass
+        #TODO IMPLEMENT ME
+        #mocked out for testing. 
+        return SteamPublicKey()
 
     async def login_with_credentials(username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
         pass

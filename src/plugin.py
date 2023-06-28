@@ -248,7 +248,7 @@ If preparations for one of these functions has been started when the other is ca
             data = vdf.loads()
 
     async def _parallel_prep_local_size(game_ids: List[str]) -> Dict[str, Optional[int]]:
-
+        pass
 
 
     async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, str]:

@@ -126,7 +126,7 @@ class FutureInfo(NamedTuple):
         retVal, _ = self.is_expected_response_with_message(return_type, target_name)
         return retVal
 
-    def is_expected_response_with_message(self, return_type:EMsg, target_name: Optional[str]) -> Tuple(bool, str):
+    def is_expected_response_with_message(self, return_type:EMsg, target_name: Optional[str]) -> Tuple[bool, str]:
         expected_return_type_str = self.expected_return_type.name if self.expected_return_type is not None else "<no response>"
 
         if return_type == EMsg.ServiceMethod:

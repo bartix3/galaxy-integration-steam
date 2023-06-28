@@ -6,7 +6,7 @@ A collection of classes that the steam network model-view-controller will use to
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum, IntEnum, StrEnum
+from enum import Enum, IntEnum
 from typing import NamedTuple, Dict, Optional, List
 from rsa import PublicKey
 
@@ -33,7 +33,7 @@ class ViewPage(NamedTuple):
     end_uri : str
     end_uri_regex : str
 
-class WebpageView(Enum, ViewPage):
+class WebpageView(ViewPage, Enum):
     #standard login and the version where users will do their own enciphering can be toggled between. So they need to provide both end uris. 
     LOGIN               = ViewPage("login", 'login_finished', r'.*login_finished.*|.*paranoid_user_finished.*')
     PARANOID_USER       = ViewPage("login", 'paranoid_user_finished', r'.*login_finished.*|.*paranoid_user_finished.*')
