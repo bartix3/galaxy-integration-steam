@@ -21,9 +21,9 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 
 """TESTING IMPORTS REMOVE WHEN IMPLEMENTED"""
 
-from rsa import PublicKey
+import rsa
 from datetime import datetime, timezone
-
+from .protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation, EAuthSessionGuardType
 """ END TEST IMPORTS """
 
 
@@ -41,7 +41,7 @@ class SteamNetworkModel:
     """
 
     def __init__(self):
-        self._queue : asyncio.Queue = asyncio.Queue()
+        #self._queue : asyncio.Queue = asyncio.Queue()
         self._websocket : WebSocketClientProtocol = None
         self._parser : ProtocolParser = None
         self._server_cell_id = 0
@@ -98,17 +98,25 @@ class SteamNetworkModel:
 
         pass
 
-    async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
+    #async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
+    def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
         #TODO IMPLEMENT ME
         #mocked out for testing. 
         n = 166216016669124681189715124291788488134690702830912988407101038816030510132019088167419181576799958097756535067076733167046787084619452807409015149987648895188334375644335697398779757045262676260540557200391167823118059890416798468489521572060259665745023342154723296088414389812809069412844447515565743683147
         e = 65537
-        key = PublicKey(n,e)
+        key = rsa.PublicKey(n,e)
         timestamp = int(datetime.now(timezone.utc).timestamp())
         return SteamPublicKey(key, timestamp)
 
-    async def login_with_credentials(username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
-        pass
+    #async def login_with_credentials(self, username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
+    def login_with_credentials(self, username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
+        #TODO IMPLEMENT ME
+        #mocked out for testing. 
+        client_id = 1337
+        request_id = b'1234567'
+        interval = 0.1
+        allowed_methods = [CAuthentication_AllowedConfirmation(EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode, "We send an email to @comcast.net")]
+        return ModelAuthCredentialData(client_id, request_id, interval, allowed_methods)
 
     async def update_two_factor(self, request_id: int, steam_id: int, code: str, is_email: bool) -> Optional[ModelAuthError]:
         pass

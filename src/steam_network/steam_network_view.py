@@ -74,7 +74,7 @@ class SteamNetworkView:
         return (user, pws)
 
     def login_success_has_2fa(self, auth_modes: List[CAuthentication_AllowedConfirmation]) -> NextStep:
-        Dict[str, str] = bonus_data = {}
+        bonus_data : Dict[str, str] = {}
 
         view: WebpageView = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
 

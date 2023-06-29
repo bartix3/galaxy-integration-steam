@@ -73,20 +73,27 @@ class SteamNetworkController:
             logger.error("Unexpected state in pass_login_credentials")
             raise UnknownBackendResponse()
 
-    async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:
+    #async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]: #todo revert when not testing.
+    def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:
 
         data_or_error = self._view.retrieve_data_regular_login(credentials)
+        print("Got regular login data")
         if isinstance(data_or_error, NextStep):
             return data_or_error
         (username, password) = data_or_error
-        key_or_error = await self._model.retrieve_rsa_key(username)
+        print("waiting for rsa key")
+        #key_or_error = await self._model.retrieve_rsa_key(username) #revert
+        key_or_error = self._model.retrieve_rsa_key(username)
         if isinstance(key_or_error, SteamPublicKey):
             logger.info("received new RSA key from steam")
+            print("received new RSA key from steam")
             key = cast(SteamPublicKey, key_or_error)
             enciphered = encrypt(password.encode('utf-8', errors="ignore"), key.rsa_public_key)
-            return await self.__do_login_common(username, enciphered, key.timestamp, False)
+            return self.__do_login_common(username, enciphered, key.timestamp, False)
+            #return await self.__do_login_common(username, enciphered, key.timestamp, False)
         else:
             logger.warning("Login failed on the rsa key. this is an unexpected behavior.")
+            print("Login failed on the rsa key. this is an unexpected behavior.")
             return self._view.login_failed(cast(ModelAuthError, key_or_error))
 
     async def _handle_two_factor_code_result(self, credentials: Dict[str, str], is_email_code: bool) -> Union[Authentication, NextStep]:
@@ -141,8 +148,10 @@ class SteamNetworkController:
         (username, enciphered_password, timestamp) = cast(Tuple[str, bytes, int], fallback_or_data)
         return await self.__do_login_common(username, enciphered_password, timestamp, True)
 
-    async def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]:
-        two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp)
+    #async def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]: #testing, needs revert. 
+    def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]:
+        #two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp) #testing, needs revert
+        two_factor_data_or_error = self._model.login_with_credentials(username, enciphered_password, timestamp)
         if isinstance(two_factor_data_or_error, ModelAuthCredentialData):
             self._two_factor_info = cast(ModelAuthCredentialData, two_factor_data_or_error)
 
@@ -152,7 +161,8 @@ class SteamNetworkController:
                 raise UnknownBackendResponse()
             elif (auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
                 logger.info("User does not require SteamGuard for authentication. Attempting to confirm this.")
-                return await self._handle_steam_guard_none()
+                #return await self._handle_steam_guard_none() #testing, needs revert. 
+                return self._handle_steam_guard_none()
             else:
                 return self._view.login_success_has_2fa(auth_methods)
         else:
