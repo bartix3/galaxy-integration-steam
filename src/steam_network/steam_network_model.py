@@ -1,7 +1,6 @@
 import asyncio
 from asyncio.futures import Future
 import ssl
-from contextlib import suppress
 from typing import Callable, Optional, Any, Dict, Union, cast, List
 
 from galaxy.api.errors import BackendNotAvailable, BackendTimeout, BackendError, InvalidCredentials, NetworkError, AccessDenied, AuthenticationRequired
@@ -98,8 +97,7 @@ class SteamNetworkModel:
 
         pass
 
-    #async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
-    def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
+    async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
         #TODO IMPLEMENT ME
         #mocked out for testing. 
         n = 166216016669124681189715124291788488134690702830912988407101038816030510132019088167419181576799958097756535067076733167046787084619452807409015149987648895188334375644335697398779757045262676260540557200391167823118059890416798468489521572060259665745023342154723296088414389812809069412844447515565743683147
@@ -108,22 +106,34 @@ class SteamNetworkModel:
         timestamp = int(datetime.now(timezone.utc).timestamp())
         return SteamPublicKey(key, timestamp)
 
-    #async def login_with_credentials(self, username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
-    def login_with_credentials(self, username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
+    async def login_with_credentials(self, username: str, enciphered_password : str, timestamp : int) -> Union[ModelAuthCredentialData, ModelAuthError]:
         #TODO IMPLEMENT ME
         #mocked out for testing. 
         client_id = 1337
         request_id = b'1234567'
         interval = 0.1
+        steam_id = 24
         allowed_methods = [CAuthentication_AllowedConfirmation(EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode, "We send an email to @comcast.net")]
-        return ModelAuthCredentialData(client_id, request_id, interval, allowed_methods)
+        return ModelAuthCredentialData(client_id, request_id, interval, steam_id, allowed_methods)
 
     async def update_two_factor(self, request_id: int, steam_id: int, code: str, is_email: bool) -> Optional[ModelAuthError]:
-        pass
+        #TODO IMPLEMENT ME!
+        #mocked out for testing
+        return None
+
+
 
     async def check_authentication_status(request_id: int) -> Union[ModelAuthPollResult, ModelAuthPollError]:
-        pass
+        #TODO IMPLEMENT ME!
+        #mocked out for testing
+        client_id: int = 1337
+        account_name: str = "Bob Saget"
+        confirmed_steam_id: int = 9001
+        refresh_token: str = "refresh_token"
+        return ModelAuthPollResult(client_id, account_name, confirmed_steam_id, refresh_token)
 
     #if this fails, we don't care why - it either means our old stored credentials were bad and we just need to renew them, or despite getting a refresh token it's somehow invalid. The latter is not recoverable.
     async def steam_client_login(account_name: str, steam_id: int, access_token: str, os_value: int) -> Optional[ModelAuthClientLoginResult]:
-        pass 
+        #TODO IMPLEMENT ME!
+        #mocked out for testing
+        return ModelAuthClientLoginResult()

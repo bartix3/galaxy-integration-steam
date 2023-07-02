@@ -29,6 +29,7 @@ class SteamNetworkController:
         self._auth_data                 : Optional[ControllerAuthData] = None
         self._unauthed_username         : Optional[str] = None #username is only used in subsequent auth calls 
         self._unauthed_steam_id         : Optional[int] = None #unverified steam id. Once verified, this is stored in the cache.
+        self._use_paranoid_login        : bool = False #stores the paranoid login state if we need to fall back to login page.
         self._two_factor_info           : Optional[ModelAuthCredentialData] = None #current two-factor data. Used to redo 2FA on a failure. Once a poll is successful, this data is removed.
         self._update_stored_credentials : Callable[[Dict[str, Any]], None] = update_stored_credentials
         pass
@@ -52,7 +53,7 @@ class SteamNetworkController:
 
 
         self._update_stored_credentials({}) #clear the credentials. May already be clear but we just want to make sure.
-        return self._view.fallback_login_page(True)
+        return self._view.fallback_login_page(True, self._use_paranoid_login)
 
     async def pass_login_credentials(self, credentials: Dict[str, str], _ : List[Dict[str, str]]) -> Union[Authentication, NextStep]:
         login_state = self._view.get_WebPage(credentials["end_uri"])
@@ -73,8 +74,8 @@ class SteamNetworkController:
             logger.error("Unexpected state in pass_login_credentials")
             raise UnknownBackendResponse()
 
-    #async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]: #todo revert when not testing.
-    def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:
+    async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]: #todo revert when not testing.
+        self._use_paranoid_login = False
 
         data_or_error = self._view.retrieve_data_regular_login(credentials)
         print("Got regular login data")
@@ -82,15 +83,13 @@ class SteamNetworkController:
             return data_or_error
         (username, password) = data_or_error
         print("waiting for rsa key")
-        #key_or_error = await self._model.retrieve_rsa_key(username) #revert
-        key_or_error = self._model.retrieve_rsa_key(username)
+        key_or_error = await self._model.retrieve_rsa_key(username) #revert
         if isinstance(key_or_error, SteamPublicKey):
             logger.info("received new RSA key from steam")
             print("received new RSA key from steam")
             key = cast(SteamPublicKey, key_or_error)
             enciphered = encrypt(password.encode('utf-8', errors="ignore"), key.rsa_public_key)
-            return self.__do_login_common(username, enciphered, key.timestamp, False)
-            #return await self.__do_login_common(username, enciphered, key.timestamp, False)
+            return await self.__do_login_common(username, enciphered, key.timestamp, False)
         else:
             logger.warning("Login failed on the rsa key. this is an unexpected behavior.")
             print("Login failed on the rsa key. this is an unexpected behavior.")
@@ -102,7 +101,7 @@ class SteamNetworkController:
             logger.exception("Two Factor page returned but the steam id and two factor information are not initialized. This is unexpected")
             raise UnknownBackendResponse()
 
-        code_or_error = self._view.retrieve_data_two_factor(credentials, self._two_factor_info.allowed_authentication_methods)
+        code_or_error = self._view.retrieve_data_two_factor(credentials, self._two_factor_info.allowed_authentication_methods, self._use_paranoid_login)
         
         if(isinstance(code_or_error, NextStep)):
             return code_or_error
@@ -111,14 +110,14 @@ class SteamNetworkController:
             #either successful and returns nothing, or a failure and returns the error info there. 
             maybe_error = await self._model.update_two_factor(self._two_factor_info.request_id, self._unauthed_steam_id, code, is_email_code)
             if (isinstance(maybe_error, ModelAuthError)):
-                return self._view.two_factor_code_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, maybe_error))
+                return self._view.two_factor_code_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, maybe_error), self._use_paranoid_login)
             else:
                 data_or_error = await self._model.check_authentication_status()
                 if isinstance(data_or_error, ModelAuthPollError):
                     self._two_factor_info.client_id = data_or_error.new_client_id
                     return self._view.two_factor_failed(credentials, self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, data_or_error))
                 else:
-                    self._two_factor_info.client_id = data_or_error.client_id
+                    self._two_factor_info = None #clear 2FA info since we just completed 2FA successfully. 
                     return await self._attempt_client_login(data_or_error)
 
     async def _handle_confirmation_result(self):
@@ -130,6 +129,8 @@ class SteamNetworkController:
             return self._view.mobile_confirmation_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, authentication_data_or_error))
 
     async def _handle_retrieve_rsa_result(self, credentials: Dict[str, str])  -> Union[Authentication, NextStep]:
+        self._use_paranoid_login = True
+
         username_or_display = self._view.retrieve_data_paranoid_username(credentials)
         if isinstance(username_or_display, NextStep):
             return username_or_display
@@ -139,7 +140,7 @@ class SteamNetworkController:
             key_data = cast(SteamPublicKey, key_or_error)
             return self._view.paranoid_username_success(username, key_data.rsa_public_key, key_data.timestamp)
         else:
-            return self._view.login_failed(cast(ModelAuthError, key_or_error))
+            return self._view.paranoid_username_failed(cast(ModelAuthError, key_or_error))
 
     async def _handle_manual_deciphering_result(self, credentials: Dict[str, str])  -> Union[Authentication, NextStep]:
         fallback_or_data = self._view.retrieve_data_paranoid_pt2(credentials)
@@ -148,12 +149,11 @@ class SteamNetworkController:
         (username, enciphered_password, timestamp) = cast(Tuple[str, bytes, int], fallback_or_data)
         return await self.__do_login_common(username, enciphered_password, timestamp, True)
 
-    #async def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]: #testing, needs revert. 
-    def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]:
-        #two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp) #testing, needs revert
-        two_factor_data_or_error = self._model.login_with_credentials(username, enciphered_password, timestamp)
+    async def __do_login_common(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]: #testing, needs revert. 
+        two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp) #testing, needs revert
         if isinstance(two_factor_data_or_error, ModelAuthCredentialData):
             self._two_factor_info = cast(ModelAuthCredentialData, two_factor_data_or_error)
+            self._unauthed_steam_id = self._two_factor_info.steam_id
 
             auth_methods = self._two_factor_info.allowed_authentication_methods
             if not auth_methods or not auth_methods[0] or auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown:
@@ -161,8 +161,8 @@ class SteamNetworkController:
                 raise UnknownBackendResponse()
             elif (auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
                 logger.info("User does not require SteamGuard for authentication. Attempting to confirm this.")
-                #return await self._handle_steam_guard_none() #testing, needs revert. 
-                return self._handle_steam_guard_none()
+                self._two_factor_info = None #clear it since we're done with 2FA.
+                return await self._handle_steam_guard_none() #testing, needs revert. 
             else:
                 return self._view.login_success_has_2fa(auth_methods)
         else:
@@ -183,7 +183,7 @@ class SteamNetworkController:
             raise UnknownBackendResponse()
 
     async def _attempt_client_login(self, poll_result: ModelAuthPollResult) -> Authentication:
-        auth = self._attempt_client_login_common(poll_result.confirmed_steam_id, poll_result.account_name, poll_result.refresh_token)
+        auth = await self._attempt_client_login_common(poll_result.confirmed_steam_id, poll_result.account_name, poll_result.refresh_token)
         if (auth is None):
             logger.warning("Client Login failed despite credential login succeeding. Nothing to fall back to.")
             raise UnknownBackendResponse()

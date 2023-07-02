@@ -82,16 +82,21 @@ class ModelAuthCredentialData():
 
     essentially a named tuple but the list needs to be sorted, and client id is mutable (subsequent polls can update this value).
     """
-    def __init__(self, client_id: int, request_id : bytes, interval : float, allowed_authentication_methods : List[CAuthentication_AllowedConfirmation]):
+    def __init__(self, client_id: int, request_id : bytes, interval : float, steam_id: int, allowed_authentication_methods : List[CAuthentication_AllowedConfirmation]):
         self._client_id : int = client_id
         self._request_id : bytes = request_id #identifier for this (successful) login attempt
         self._interval : float = interval #interval on which to ping steam for successful login info. Used to prevent LogOff try another CM.
+        self._steam_id: int = steam_id
         self._allowed_authentication_methods : List[CAuthentication_AllowedConfirmation] = sorted(filter(ModelAuthCredentialData._allowed_items, allowed_authentication_methods), \
             key = ModelAuthCredentialData._auth_priority, reverse = True)
 
     @property
     def client_id(self):
         return self._client_id
+
+    @property
+    def steam_id(self):
+        return self._steam_id
 
     @client_id.setter
     def client_id(self, value: int):

@@ -160,35 +160,43 @@ class SteamNetworkView:
         start_uri = self._build_start_uri(WebpageView.PARANOID_USER.view_name, **err_msg)
         return self._build_NextStep(start_uri, WebpageView.PARANOID_USER.end_uri_regex)
 
-    def retrieve_data_two_factor(self, credentials : Dict[str, str], auth_modes: List[CAuthentication_AllowedConfirmation]) -> Union[NextStep, str]:
+    def retrieve_data_two_factor(self, credentials : Dict[str, str], auth_modes: List[CAuthentication_AllowedConfirmation], use_paranoid_login_fallback: bool) -> Union[NextStep, str]:
         params = parse_qs(urlsplit(credentials["end_uri"]).query)
         if ("code" not in params):
-            return self.two_factor_code_failed(auth_modes, ModelAuthError(AuthErrorCode.TWO_FACTOR_MISSING, ""))
+            return self.two_factor_code_failed(auth_modes, ModelAuthError(AuthErrorCode.TWO_FACTOR_MISSING, ""), use_paranoid_login_fallback)
         else:
             return params["code"][0].strip()
     
     #two factor success doesn't display a page.
 
-    def two_factor_code_failed(self, auth_modes: List[CAuthentication_AllowedConfirmation], error: Optional[ModelAuthError]):
+    def two_factor_code_failed(self, auth_modes: List[CAuthentication_AllowedConfirmation], error: Optional[ModelAuthError], use_paranoid_login_fallback: bool):
         err_msg : Dict[str, str] = {"errored" : "true"}
+        expired : bool = False
+
         if (error is not None):
             if (error.error_code == AuthErrorCode.TWO_FACTOR_MISSING):
                 err_msg["two_factor_reason"] = "missing"
             elif (error.error_code == AuthErrorCode.TWO_FACTOR_INCORRECT):
                 err_msg["two_factor_reason"] = "incorrect"
+            elif (error.error_code == AuthErrorCode.TWO_FACTOR_EXPIRED):
+                expired = True
+                err_msg["fallback_reason"] = "two-factor-expired"
             elif (error.error_code == AuthErrorCode.NO_ERROR):
                 logger.warning("Manual encipher login failed but the error code was no error. Will fallback to rsa login, but printing trace anyway\n" + get_traceback(False))
             #all remaining cases are unexpected and therefore ignored.
             else:
                 logger.warning("Unexpected error: " + error.error_code.name + ", message: " + error.steam_error_message)
 
-        err_msg["auth_message"] = auth_modes[0].associated_message
-        view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
-        if (view is None):
-            raise UnknownBackendResponse()
+        if (expired):
+            return self.fallback_login_page(True, use_paranoid_login_fallback)
+        else:
+            err_msg["auth_message"] = auth_modes[0].associated_message
+            view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
+            if (view is None):
+                raise UnknownBackendResponse()
 
-        start_uri = self._build_start_uri(view.view_name, **err_msg)
-        return self._build_NextStep(start_uri, view.end_uri_regex)
+            start_uri = self._build_start_uri(view.view_name, **err_msg)
+            return self._build_NextStep(start_uri, view.end_uri_regex)
 
     #no data to retrieve on confirmation page.
 
@@ -218,11 +226,12 @@ class SteamNetworkView:
     #no page for token login. 
 
     #login page as a fallback. Also used for login if logging in via stored credentials fails or if the stored credentials are invalid.
-    def fallback_login_page(self, is_fallback = True) -> NextStep:
+    def fallback_login_page(self, is_fallback = True, use_paranoid_login = False) -> NextStep:
         err_msg = {"errored": "true"} if is_fallback else {}
 
-        start_uri = self._build_start_uri(WebpageView.LOGIN.view_name, **err_msg)
-        return self._build_NextStep(start_uri, WebpageView.LOGIN.end_uri_regex)
+        view = WebpageView.PARANOID_USER if use_paranoid_login else WebpageView.LOGIN
+        start_uri = self._build_start_uri(view.view_name, **err_msg)
+        return self._build_NextStep(start_uri, view.end_uri_regex)
 
 
     def _build_start_uri(self, view_name: str, ** kwargs: str) -> str:

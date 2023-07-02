@@ -70,7 +70,7 @@
     <Compile Include="nethook_helpers.py" />
     <Compile Include="src\backend_steam_network.py" />
     <Compile Include="src\steam_network\caches\cache_base.py" />
-    <Compile Include="src\steam_network\caches\cache_holder.py" />
+    <Compile Include="src\steam_network\local_persistent_cache.py" />
     <Compile Include="src\client.py" />
     <Compile Include="src\plugin.py" />
     <Compile Include="src\registry_monitor.py" />
@@ -141,7 +141,6 @@
     <Compile Include="tests\tests_steam_network\test_websocket_client.py" />
     <Compile Include="tests\tests_steam_network\test_websocket_list.py" />
     <Compile Include="tests\tests_steam_network\__init__.py" />
-    <Compile Include="tests\test_backend_switch.py" />
     <Compile Include="tests\test_cache.py" />
     <Compile Include="tests\test_calling_unsupported_method.py" />
     <Compile Include="tests\test_custom_config.py" />

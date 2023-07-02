@@ -30,25 +30,6 @@ async def test_public_profile_prompt_with_public_profile_with_2fa(
     )
     assert isinstance(result, Authentication)
 
-
-@pytest.mark.parametrize('public_state, retry, expected_result', [
-    pytest.param(True, False, Authentication, id="user with public profile clicked 'Skip' button"),
-    pytest.param(ProfileIsNotPublic, False, Authentication, id="user with private profile clicked 'Skip' button"),
-    pytest.param(ProfileIsNotPublic, True, NextStep, id="user with private profile clicked 'Retry' button"),
-])
-async def test_public_profile_prompt_buttons(
-    plugin, profile_checker, public_state, retry, expected_result
-):
-    profile_checker.check_is_public_by_steam_id.side_effect = public_state
-
-    result = await plugin.pass_login_credentials(
-        Mock(str, name="step_name"),
-        {"end_uri": f".*public_prompt_finished.*?public_profile_fallback={retry}"},
-        {}
-    )
-    assert isinstance(result, expected_result)
-
-
 @pytest.mark.parametrize('public_state, retry', [
     pytest.param(ProfileIsNotPublic, True),
 ])

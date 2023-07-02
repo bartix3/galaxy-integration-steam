@@ -9,14 +9,14 @@ logger = logging.getLogger(__name__)
 
 U = TypeVar("U")
 class CacheBase(ABC, Generic[U]):
-    """Base class for all caches. The generic type is used to determine what information
+    """Base class for all caches. The generic type is used to determine what information it will return. 
     """
-    def __init__(self, related_data: Any):
+    def __init__(self):
         self._is_modified = False
         self._ready_event = asyncio.Event()
 
-    def check_modified(self) -> bool:
-        """ Check if any data in this class has been modified since it was last reset. resets it so any modified checks will return false until a new change is made.
+    def is_modified(self) -> bool:
+        """ Check if any data in this class has been modified since it was last reset. Does not resetthe modified state. 
         
         if the data is not ready, this function will throw an error. 
         """
@@ -65,5 +65,4 @@ class CacheBase(ABC, Generic[U]):
 
     @abstractmethod
     def convert_to_cachable() -> Optional[U]:
-
         pass
