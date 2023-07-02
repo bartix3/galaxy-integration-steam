@@ -1,8 +1,8 @@
 {
-	"name": "Galaxy Steam plugin Version 2",
+	"name": "Galaxy Steam plugin rewrite",
 	"platform": "steam",
 	"guid": "ca27391f-2675-49b1-92c0-896d43afa4f8",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Galaxy Steam plugin alpha build",
 	"author": "ABaumher, don-de-marco et al.",
 	"email": "baumhera912@gmail.com",
