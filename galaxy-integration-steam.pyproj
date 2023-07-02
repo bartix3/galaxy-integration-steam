@@ -69,11 +69,20 @@
   <ItemGroup>
     <Compile Include="nethook_helpers.py" />
     <Compile Include="src\backend_steam_network.py" />
+    <Compile Include="src\cache.py" />
+    <Compile Include="src\http_client.py" />
+    <Compile Include="src\local\base.py" />
+    <Compile Include="src\local\mac.py" />
+    <Compile Include="src\local\shared.py" />
+    <Compile Include="src\local\win.py" />
+    <Compile Include="src\local\__init__.py" />
+    <Compile Include="src\persistent_cache_state.py" />
     <Compile Include="src\steam_network\caches\cache_base.py" />
     <Compile Include="src\steam_network\local_persistent_cache.py" />
     <Compile Include="src\client.py" />
     <Compile Include="src\plugin.py" />
     <Compile Include="src\registry_monitor.py" />
+    <Compile Include="src\steam_network\authentication_data.py" />
     <Compile Include="src\steam_network\caches\cache_proto.py" />
     <Compile Include="src\steam_network\caches\__init__.py" />
     <Compile Include="src\steam_network\caches\friends_cache.py" />
@@ -119,7 +128,6 @@
     <Compile Include="src\steam_network\websocket_client.py" />
     <Compile Include="src\steam_network\websocket_list.py" />
     <Compile Include="src\steam_network\__init__.py" />
-    <Compile Include="src\uri_scheme_handler.py" />
     <Compile Include="src\version.py" />
     <Compile Include="tasks.py" />
     <Compile Include="task_helper.py" />
@@ -161,6 +169,12 @@
     <Folder Include="src\steam_network\web\fonts\" />
     <Folder Include="src\steam_network\web\fonts\LatoWeb\" />
     <Folder Include="src\steam_network\web\img\" />
+    <Folder Include="src\commonWeb\" />
+    <Folder Include="src\commonWeb\css" />
+    <Folder Include="src\commonWeb\fonts\" />
+    <Folder Include="src\commonWeb\fonts\LatoWeb" />
+    <Folder Include="src\commonWeb\img" />
+    <Folder Include="src\local\" />
     <Folder Include="src\steam_network" />
     <Folder Include="src\steam_network\caches\" />
     <Folder Include="src\steam_network\protocol" />

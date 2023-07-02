@@ -2,7 +2,7 @@ import asyncio
 import logging
 import secrets
 
-from typing import Callable, List, TYPE_CHECKING, Optional, Tuple, Dict
+from typing import Callable, List, Optional, Tuple, Dict, Iterable
 from asyncio import Future
 
 from rsa import PublicKey
@@ -12,14 +12,14 @@ from .steam_auth_polling_data import SteamPollingData
 
 from .caches.local_machine_cache import LocalMachineCache
 from .caches.friends_cache import FriendsCache
-from .caches.games_cache import GamesCache
-from .caches.stats_cache import StatsCache
+from .caches.games_cache import GamesCache, App, SteamLicense, SteamPackage
+from .caches.stats_cache import StatsCache, Achievement, Stat
 from .caches.user_info_cache import UserInfoCache
 from .caches.times_cache import TimesCache
 
 from .authentication_data import AuthenticationData
 
-from .protocol.protobuf_client import ProtobufClient, SteamLicense
+from .protocol.protobuf_client import ProtobufClient
 from .protocol.consts import EResult, EFriendRelationship, EPersonaState
 
 from .enums import TwoFactorMethod, UserActionRequired, to_TwoFactorWithMessage, to_EAuthSessionGuardType
@@ -33,8 +33,8 @@ from .protocol.messages.steammessages_auth import (
 )
 
 from .protocol.messages.steammessages_clientserver_userstats import (
-    CMsgClientGetUserStatsResponse,
-    CMsgClientGetUserStatsResponseAchievement_Blocks
+    CMsgClientGetUserStatsResponseAchievement_Blocks,
+    CMsgClientGetUserStatsResponseStats,
 )
 
 
@@ -69,8 +69,8 @@ class ProtocolClient:
         self._protobuf_client.relationship_handler = self._relationship_handler
         self._protobuf_client.user_info_handler = self._user_info_handler
         self._protobuf_client.user_nicknames_handler = self._user_nicknames_handler
-        self._protobuf_client.app_info_handler = self._app_info_handler
-        self._protobuf_client.package_info_handler = self._package_info_handler
+        self._protobuf_client.package_handler = self._package_handler
+        self._protobuf_client.app_handler = self._app_handler
         self._protobuf_client.license_import_handler = self._license_import_handler
         self._protobuf_client.translations_handler = self._translations_handler
         self._protobuf_client.stats_handler = self._stats_handler
@@ -303,9 +303,9 @@ class ProtocolClient:
             # known example is LogOnResponse with result=EResult.TryAnotherCM
             raise translate_error(result)
 
-    async def import_game_stats(self, game_ids):
-        for game_id in game_ids:
-            self._protobuf_client.job_list.append({"job_name": "import_game_stats", "game_id": game_id})
+    async def import_game_stats(self, tuples: Iterable[Tuple[int, int]]):
+        for tup in tuples:
+            self._protobuf_client.job_list.append({"job_name": "import_game_stats", "game_id": tup[0], "crc_stats": tup[1]})
         #pass
 
     async def import_game_times(self):
@@ -363,43 +363,15 @@ class ProtocolClient:
         self._friends_cache.update_nicknames(nicknames)
 
     async def _license_import_handler(self, steam_licenses: List[SteamLicense]):
-        logger.info('Handling %d user licenses', len(steam_licenses))
-        not_resolved_licenses = []
+        logger.info("Starting license import for %d packages", len(steam_licenses))
+        packages_to_import = self._games_cache.start_packages_import(steam_licenses)
+        await self._protobuf_client.get_packages_info(packages_to_import)
 
-        resolved_packages = self._games_cache.get_resolved_packages()
-        package_ids = set([str(steam_license.license_data.package_id) for steam_license in steam_licenses])
+    def _package_handler(self, packages_with_apps: List[SteamPackage]) -> List[int]:
+        return self._games_cache.add_packages(packages_with_apps)
 
-        for steam_license in steam_licenses:
-            if (steam_license is None):
-                continue
-            if str(steam_license.license_data.package_id) not in resolved_packages:
-                not_resolved_licenses.append(steam_license)
-
-        if len(package_ids) < 12000:
-            # TODO rework cache invalidation for bigger libraries (steam sends licenses in packs of >12k licenses)
-            if package_ids != self._games_cache.get_package_ids():
-                logger.info(
-                    "Licenses list different than last time (cached packages: %d, new packages: %d). Reseting cache.",
-                    len(self._games_cache.get_package_ids()),
-                    len(package_ids)
-                )
-                self._games_cache.reset_storing_map()
-                self._games_cache.start_packages_import(steam_licenses)
-                return await self._protobuf_client.get_packages_info(steam_licenses)
-
-        # This path will only attempt import on packages which aren't resolved (dont have any apps assigned)
-        logger.info("Starting license import for %d packages, skipping %d already resolved.",
-            len(package_ids - resolved_packages),
-            len(resolved_packages)
-        )
-        self._games_cache.start_packages_import(not_resolved_licenses)
-        await self._protobuf_client.get_packages_info(not_resolved_licenses)
-
-    def _app_info_handler(self, appid : str, package_id : Optional[str] = None, title: Optional[str]=None, type_: Optional[str]=None, parent: Optional[str]=None):
-        if package_id:
-            self._games_cache.update_license_apps(package_id, appid)
-        if title and type_:
-            self._games_cache.update_app_title(appid, title, type_, parent)
+    def _app_handler(self, apps: List[App]):
+        self._games_cache.add_apps(apps)
 
     def _package_info_handler(self):
         self._games_cache.update_packages()
@@ -412,25 +384,36 @@ class ProtocolClient:
             await self._protobuf_client.get_presence_localization(appid)
 
     def _stats_handler(self,
-        game_id: str,
-        stats: CMsgClientGetUserStatsResponse.Stats,
-        achievement_blocks: CMsgClientGetUserStatsResponseAchievement_Blocks,
-        schema: dict
+        game_id: int,
+        stats: List[CMsgClientGetUserStatsResponseStats],
+        achievement_blocks: List[CMsgClientGetUserStatsResponseAchievement_Blocks],
+        schema: dict,
+        crc_stats: int
     ):
-        def get_achievement_name(achievements_block_schema: dict, bit_no: int) -> str:
-            name = achievements_block_schema['bits'][str(bit_no)]['display']['name']
+        def get_achievement_name(block_schema: dict, bit_no: int) -> str:
+            name = block_schema['bits'][str(bit_no)]['display']['name']
             try:
                 return name['english']
             except TypeError:
                 return name
 
-        logger.debug(f"Processing user stats response for {game_id}")
-        achievements_unlocked = []
+        def get_stat_name(block_schema: Dict) -> str:
+            return block_schema["display"]["name"] or block_schema["name"]
 
+        logger.debug(f"Processing user stats response for {game_id}")
+
+        if str(game_id) not in schema:
+            logger.debug(f"schema didn't contain game id {game_id}; received stats: {stats}, received achievements: {achievement_blocks}")
+            self._stats_cache.update_stats(game_id, [], [], 0)
+            return
+
+        schema = schema[str(game_id)]  # short cut
+
+        achievements_unlocked: List[Achievement] = []
         for achievement_block in achievement_blocks:
             block_id = str(achievement_block.achievement_id)
             try:
-                stats_block_schema = schema[game_id]['stats'][block_id]
+                stats_block_schema = schema['stats'][block_id]
             except KeyError:
                 logger.warning("No stat schema for block %s for game: %s", block_id, game_id)
                 continue
@@ -445,13 +428,39 @@ class ProtocolClient:
                         )
                         continue
 
-                    achievements_unlocked.append({
-                        'id': 32 * (achievement_block.achievement_id - 1) + i,
-                        'unlock_time': unlock_time,
-                        'name': display_name
-                    })
+                    achievements_unlocked.append(Achievement(
+                        id_=32 * (achievement_block.achievement_id - 1) + i,
+                        name=display_name,
+                        unlock_time=int(unlock_time),
+                    ))
 
-        self._stats_cache.update_stats(game_id, stats, achievements_unlocked)
+        stats_result: List[Stat] = list()
+
+        # stat parsing deactivated for now, stats have some really weird properties to them which I do not yet fully understand
+        # Galaxy can't/won't import them either, so don't waste too much time on this
+
+        # for stat in stats:
+        #     stat_id = str(stat.stat_id)
+        #     block_schema = schema["stats"][stat_id]
+        #     if block_schema["type"] not in {"1", "2"}:
+        #         logger.debug(f"unexpected block type {block_schema['type']} for stats: {block_schema}")
+        #         continue
+
+        #     stat_name = get_stat_name(block_schema)
+
+        #     min_val = int(block_schema["min"]) if "min" in block_schema else None
+        #     max_val = int(block_schema["max"]) if "max" in block_schema else None
+        #     default_val = int(block_schema["default"]) if "default" in block_schema else None
+
+        #     stats_result.append(Stat(
+        #         name=stat_name,
+        #         default=default_val,
+        #         min=min_val,
+        #         max=max_val,
+        #         value=stat.stat_value
+        #     ))
+
+        self._stats_cache.update_stats(game_id, stats_result, achievements_unlocked, crc_stats)
 
     async def _user_authentication_handler(self, key, value):
         logger.info(f"Updating user info cache with new {key}")
