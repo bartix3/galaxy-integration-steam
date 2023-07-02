@@ -7,40 +7,37 @@ stripped down and re-implemented a barebones version of the plugin. For example,
 a dedicated "controller". For review purposes, you can think of the "controller" as a new steam network backend, without the interface cloak and dagger. any Steam-API related functionality is passed to the controller.
 Any local lookups about the user's system (launch games, install size, etc) are handled here and are largely unchanged. 
 
+CHANGELOG: 7/1/2023:
+Integrated @urwrstkn8mare's fixes to clean up the os-dependent code into a dedicated local folder.
+
 
 """
-
-
-
-import platform
 import asyncio
 import logging
-import traceback
 import sys
-import webbrowser
-import subprocess
 import time
-import vdf
+from typing import Any, AsyncGenerator, Dict, List, NewType, Optional, Type
 
-from typing import Dict, List, Any, AsyncGenerator, Union, Optional
-
-
-from galaxy.api.types import Game, Subscription, SubscriptionGame, Achievement, NextStep, Authentication, GameTime, UserPresence, GameLibrarySettings, UserInfo, SubscriptionDiscovery
-from galaxy.api.plugin import Plugin, create_and_run_plugin
+import certifi
 from galaxy.api.consts import Platform
+from galaxy.api.errors import AccessDenied, InvalidCredentials, NetworkError, UnknownError
+from galaxy.api.plugin import Plugin, create_and_run_plugin
+from galaxy.api.types import Game, Subscription, SubscriptionGame, Achievement, NextStep, Authentication, GameTime, UserPresence, GameLibrarySettings, UserInfo, SubscriptionDiscovery
 
-
+from local import Client as LocalClient
+from local.base import Manifest
 from .version import __version__
+
 from .steam_network.steam_network_controller import SteamNetworkController
-from .client import local_games_list, get_library_folders, StateFlags, get_state_changes, get_client_executable, load_vdf, get_app_manifests, app_id_from_manifest_path
-from uri_scheme_handler import is_uri_handler_installed
 
 logger = logging.getLogger(__name__)
 
-FAMILY_SHARE = "Steam Family Share"
+Timestamp = NewType("Timestamp", int)
 
-def is_windows():
-    return platform.system().lower() == "windows"
+FAMILY_SHARE = "Steam Family Share"
+COOLDOWN_TIME = 5
+AUTH_SETUP_ON_VERSION__CACHE_KEY = "auth_setup_on_version"
+LAUNCH_DEBOUNCE_TIME = 30
 
 
 class SteamPlugin(Plugin):
@@ -56,6 +53,12 @@ class SteamPlugin(Plugin):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
         self._controller = SteamNetworkController()
 
+        # local features
+        self._last_launch: Timestamp = 0
+        self._update_local_games_task = asyncio.create_task(asyncio.sleep(0))
+
+        # local client
+        self.local = LocalClient()
     #features are normally auto-detected. Since we only support one form of login, we can allow this behavior. 
 
     #region startup, login, and shutdown
@@ -68,7 +71,7 @@ class SteamPlugin(Plugin):
         This means things like the persistent cache are now available to us.
         """
         self._controller.handshake_complete()
-    
+
     async def authenticate(self, stored_credentials : Dict[str, Any] = None) -> Union[Authentication, NextStep]:
         """ Called when the plugin attempts to log the user in. This occurs at the start, after the handshake.
  
@@ -114,7 +117,6 @@ with a new webpage to display, in the event the user improperly input their info
         """
         return [Subscription(FAMILY_SHARE, True, None, SubscriptionDiscovery.AUTOMATIC)] #defaults to you have it, even if it's no games.
         #return [Subscription(FAMILY_SHARE, None, None, SubscriptionDiscovery.AUTOMATIC)] #legal but i have no idea what happens. 
-
 
     async def prepare_subscription_games_context(self, subscription_names: List[str]) -> None:
         """ Start a batch process to get all subscription games for the list of available subscription sources.
@@ -163,7 +165,6 @@ If preparations for one of these functions has been started when the other is ca
         """
         return await self._controller.get_unlocked_achievements(int(game_id))
 
-
     def achievements_import_complete(self):
         """Called when get_unlocked_achievements has been called on all game_ids. 
         """
@@ -202,107 +203,37 @@ If preparations for one of these functions has been started when the other is ca
     def user_presence_import_complete(self):
         self._controller.user_presence_import_complete()
     #endregion
-    
+
     def tick(self):
         self._controller.tick()
         pass
-
-    #region get info about and/or update games on local system:
-
     async def get_local_games(self):
-        #i do not understand why this was run in executor (it's not going to increase performance afaik) but i'm leaving it in as a comment if i'm wrong.
-        #loop = asyncio.get_running_loop()
-        #self._local_games_cache = await loop.run_in_executor(None, local_games_list)
-        self._local_games_cache = local_games_list()
-        return self._local_games_cache
+        return await asyncio.get_running_loop().run_in_executor(None, self.local.latest)
 
-    @staticmethod
-    def _steam_command(command, game_id):
-        if game_id == "499450": #witcher 3 hack?
-            game_id = "292030"
-        if is_uri_handler_installed("steam"):
-            webbrowser.open("steam://{}/{}".format(command, game_id))
-        else:
-            webbrowser.open("https://store.steampowered.com/about/")
+    async def launch_game(self, game_id):
+        self.local.steam_cmd("launch", game_id)
 
-    async def install_game(self, game_id: str):
-        """ installs the steam game with the given steam id.
-        """
-        SteamPlugin._steam_command("install", game_id)
+    async def install_game(self, game_id):
+        self.local.steam_cmd("install", game_id)
 
-    async def uninstall_game(self, game_id: str):
-        """ Uninstalls the steam game with the given steam id.
-        """
-        
-        SteamPlugin._steam_command("uninstall", game_id)
+    async def uninstall_game(self, game_id):
+        self.local.steam_cmd("uninstall", game_id)
 
-    async def launch_game(self, game_id: str):
-        """ Launches the steam game with the given steam id.
-        """
-        
-        SteamPlugin._steam_command("launch", game_id)
+    async def prepare_local_size_context(self, game_ids: List[str]):
+        return {m.id(): m for m in self.local.manifests()}
 
-    @staticmethod
-    def _parallel_get_size(id : str, manifest_path : str) -> Optional[int]:
-        with open(manifest_path, encoding="utf-8", errors="replace") as vdf_file:
-            data = vdf.loads()
-
-    async def _parallel_prep_local_size(game_ids: List[str]) -> Dict[str, Optional[int]]:
-        pass
-
-
-    async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, str]:
-        library_folders = get_library_folders()
-        app_manifests = list(get_app_manifests(library_folders))
-        return {app_id_from_manifest_path(path): path for path in app_manifests}
-        
-
-    async def get_local_size(self, game_id: str, context: Dict[str, str]) -> Optional[int]:
-        """ Returns the amount of space, in bytes, the game specificed by the game_id takes up on user storage. If it cannot be determined, returns None.
-        """
-        try:
-            manifest_path = context[game_id]
-        except KeyError:  # not installed
-            return 0
-        try:
-            manifest = load_vdf(manifest_path)
-            app_state = manifest["AppState"]
-            state_flags = StateFlags(int(app_state["StateFlags"]))
-            if StateFlags.FullyInstalled in state_flags:
-                return int(app_state["SizeOnDisk"])
-            else:  # as SizeOnDisk is 0
-                return int(app_state["BytesDownloaded"])
-        except Exception as e:
-            logger.warning("Cannot parse SizeOnDisk in %s: %r", manifest_path, e)
-            return None
-    #endregion get info about and/or update games on local system:
-
-    #region launching/closing games.
+    async def get_local_size(self, game_id: str, context: Dict[str, Manifest]) -> Optional[int]:
+        m = context.get(game_id)
+        if m:
+            return m.app_size()
 
     async def shutdown_platform_client(self) -> None:
-        """
-        Shuts down the steam client. Steam Client launches automatically when a game is started due to DRM, but can be optionally closed on game exit, depending on user settings.
-
-        This is called by the GOG Galaxy client. 
-        """
-        launch_debounce_time = 30
-        if time.time() < self._last_launch + launch_debounce_time:
+        if time.time() < self._last_launch + LAUNCH_DEBOUNCE_TIME:
             # workaround for quickly closed game (Steam sometimes dumps false positive just after a launch)
             logging.info("Ignoring shutdown request because game was launched a moment ago")
             return
-        if is_windows():
-            exe = get_client_executable()
-            if exe is None:
-                return
-            cmd = '"{}" -shutdown -silent'.format(exe)
-        else:
-            cmd = "osascript -e 'quit app \"Steam\"'"
-        logger.debug("Running command '%s'", cmd)
-        process = await asyncio.create_subprocess_shell(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        await process.communicate()
-    #endregion
+        await self.local.steam_shutdown()
+
 
 def main():
     """ Program entry point. starts the entire plugin. 
