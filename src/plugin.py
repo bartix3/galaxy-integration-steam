@@ -10,26 +10,35 @@ Any local lookups about the user's system (launch games, install size, etc) are 
 CHANGELOG: 7/1/2023:
 Integrated @urwrstkn8mare's fixes to clean up the os-dependent code into a dedicated local folder.
 
+CHANGELOG: 7/2/2023:
+Moved all controller login to plugin. there was no point in having that logic there and not here, now that the os-dependent code is abstracted out to its own folder
 
 """
 import asyncio
 import logging
 import sys
 import time
-from typing import Any, AsyncGenerator, Dict, List, NewType, Optional, Type
+from typing import Any, AsyncGenerator, Dict, List, NewType, Optional, Tuple, Union, cast
 
 import certifi
 from galaxy.api.consts import Platform
-from galaxy.api.errors import AccessDenied, InvalidCredentials, NetworkError, UnknownError
+from galaxy.api.errors import AccessDenied, InvalidCredentials, NetworkError, UnknownBackendResponse, UnknownError
 from galaxy.api.plugin import Plugin, create_and_run_plugin
-from galaxy.api.types import Game, Subscription, SubscriptionGame, Achievement, NextStep, Authentication, GameTime, UserPresence, GameLibrarySettings, UserInfo, SubscriptionDiscovery
+from galaxy.api.types import Achievement, Authentication, Dlc, Game, GameLibrarySettings, GameTime, NextStep, Subscription, SubscriptionDiscovery, SubscriptionGame, UserInfo, UserPresence
 
-from local import Client as LocalClient
-from local.base import Manifest
+from rsa import encrypt
+
+from .local import Client as LocalClient
+from .local.base import Manifest
 from .version import __version__
 
-from .steam_network.steam_network_controller import SteamNetworkController
+from .steam_network.steam_network_model import SteamNetworkModel
+from .steam_network.steam_network_view import SteamNetworkView
+from .steam_network.user_credential_data import UserCredentialData
+from .steam_network.mvc_classes import ControllerAuthData, ModelAuthError, ModelUserAuthData, SteamPublicKey, ModelAuthPollResult, ModelAuthCredentialData, WebpageView, ModelAuthPollError
+from .steam_network.utils import get_os
 
+from .steam_network.protocol.messages.steammessages_auth import EAuthSessionGuardType
 logger = logging.getLogger(__name__)
 
 Timestamp = NewType("Timestamp", int)
@@ -51,8 +60,14 @@ class SteamPlugin(Plugin):
     """
     def __init__(self, reader, writer, token):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
-        self._controller = SteamNetworkController()
-
+        self._model                     : SteamNetworkModel = SteamNetworkModel()
+        self._view                      : SteamNetworkView = SteamNetworkView()
+        self._auth_data                 : Optional[ControllerAuthData] = None
+        self._unauthed_username         : Optional[str] = None #username is only used in subsequent auth calls 
+        self._unauthed_steam_id         : Optional[int] = None #unverified steam id. Once verified, this is stored in the cache.
+        self._use_paranoid_login        : bool = False #stores the paranoid login state if we need to fall back to login page.
+        self._two_factor_info           : Optional[ModelAuthCredentialData] = None #current two-factor data. Used to redo 2FA on a failure. Once a poll is successful, this data is removed.
+        
         # local features
         self._last_launch: Timestamp = 0
         self._update_local_games_task = asyncio.create_task(asyncio.sleep(0))
@@ -61,7 +76,7 @@ class SteamPlugin(Plugin):
         self.local = LocalClient()
     #features are normally auto-detected. Since we only support one form of login, we can allow this behavior. 
 
-    #region startup, login, and shutdown
+    #region startup, login, update, and shutdown
 
     def handshake_complete(self):
         """ Called when the handshake between GOG Galaxy Client and this plugin has completed. 
@@ -70,85 +85,197 @@ class SteamPlugin(Plugin):
         Any initialization required on the client that is necessary for the plugin to work is now complete.
         This means things like the persistent cache are now available to us.
         """
-        self._controller.handshake_complete()
+        self._model.initialize(self.persistent_cache)
 
-    async def authenticate(self, stored_credentials : Dict[str, Any] = None) -> Union[Authentication, NextStep]:
-        """ Called when the plugin attempts to log the user in. This occurs at the start, after the handshake.
- 
-        stored_credentials are a mapping of a name to data of any type that were saved from previous session(s)
-        Returns either an Authentication object, which represents a successfuly login (from stored credentials) \
-or a NextStep object, which tells GOG to display a webpage with the information necessary to get further login information from the user.
-        """
-        return await self._controller.authenticate(stored_credentials)
+    async def authenticate(self, stored_credentials : Optional[Dict[str, Any]] = None) -> Union[Authentication, NextStep]:
+        #user credential data from dict includes a null check so we don't need it here.
+        user_credential_data = UserCredentialData.from_dict(stored_credentials) 
+        if (user_credential_data.is_valid()):
+            auth = await self._attempt_client_login_common(user_credential_data.steam_id, user_credential_data.account_username, user_credential_data.refresh_token)
+            if (auth is None):
+                logger.info("Token Login failed from stored credentials. Can be caused when credentials expire or are deactivated. Falling back to normal login")
+                #fall through to regular login process.
+            else:
+                return auth
 
-    async def pass_login_credentials(self, _ : str, credentials: Dict[str, str], cookies : List[Dict[str, str]]):
-        """ Called when a webpage generated from a NextStep object completes.
+
+        self.store_credentials({}) #clear the credentials. May already be clear but we just want to make sure.
+        return self._view.fallback_login_page(True, self._use_paranoid_login)
+
+    async def pass_login_credentials(self, credentials: Dict[str, str], _ : List[Dict[str, str]]) -> Union[Authentication, NextStep]:
+        login_state = self._view.get_WebPage(credentials["end_uri"])
+        if login_state == WebpageView.LOGIN:
+            logger.info("Processing standard login page results.")
+            return await self._handle_login_result(credentials)
+        elif login_state == WebpageView.TWO_FACTOR_CONFIRMATION:
+            return await self._handle_confirmation_result()
+        elif login_state == WebpageView.TWO_FACTOR_MAIL:
+            return await self._handle_two_factor_code_result(credentials, True)
+        elif login_state == WebpageView.TWO_FACTOR_MOBILE:
+            return await self._handle_two_factor_code_result(credentials, False)
+        elif login_state == WebpageView.PARANOID_USER:
+            return await self._handle_retrieve_rsa_result(credentials)
+        elif login_state == WebpageView.PARANOID_ENCIPHERED:
+            return await self._handle_manual_eciphering_result(credentials)
+        else:
+            logger.error("Unexpected state in pass_login_credentials")
+            raise UnknownBackendResponse()
+
+    async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]: #todo revert when not testing.
+        self._use_paranoid_login = False
+
+        data_or_error = self._view.retrieve_data_regular_login(credentials)
+        print("Got regular login data")
+        if isinstance(data_or_error, NextStep):
+            return data_or_error
+        (username, password) = data_or_error
+        print("waiting for rsa key")
+        key_or_error = await self._model.retrieve_rsa_key(username) #revert
+        if isinstance(key_or_error, SteamPublicKey):
+            logger.info("received new RSA key from steam")
+            print("received new RSA key from steam")
+            key = cast(SteamPublicKey, key_or_error)
+            enciphered = encrypt(password.encode('utf-8', errors="ignore"), key.rsa_public_key)
+            return await self._do_common_credential_login(username, enciphered, key.timestamp, False)
+        else:
+            logger.warning("Login failed on the rsa key. this is an unexpected behavior.")
+            print("Login failed on the rsa key. this is an unexpected behavior.")
+            return self._view.login_failed(cast(ModelAuthError, key_or_error))
+
+    async def _handle_two_factor_code_result(self, credentials: Dict[str, str], is_email_code: bool) -> Union[Authentication, NextStep]:
         
-        this function contains an unused string that is deprecated. it's value is not defined. 
-        credentials contain the URL Parameters obtained from the end uri that caused the webpage to complete as a tuple of name and value.
-        cookies is a list of cookies that may have been saved and available to the end uri. A cookie is a collection of tuples of name and value.
+        if (self._unauthed_steam_id is None or self._two_factor_info is None):
+            logger.exception("Two Factor page returned but the steam id and two factor information are not initialized. This is unexpected")
+            raise UnknownBackendResponse()
 
-        Returns either an Authentication object, which represents a successfuly login or a NextStep object, \
-with a new webpage to display, in the event the user improperly input their information, or needs to provide additional information such as 2FA.
+        code_or_error = self._view.retrieve_data_two_factor(credentials, self._two_factor_info.allowed_authentication_methods, self._use_paranoid_login)
+        
+        if(isinstance(code_or_error, NextStep)):
+            return code_or_error
+        else:
+            code = cast(str, code_or_error)
+            #either successful and returns nothing, or a failure and returns the error info there. 
+            maybe_error = await self._model.update_two_factor(self._two_factor_info.client_id, self._unauthed_steam_id, code, is_email_code)
+            if (isinstance(maybe_error, ModelAuthError)):
+                return self._view.two_factor_code_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, maybe_error), self._use_paranoid_login)
+            else:
+                data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, False)
+                if isinstance(data_or_error, ModelAuthPollError):
+                    self._two_factor_info.client_id = data_or_error.new_client_id
+                    return self._view.two_factor_failed(credentials, self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, data_or_error))
+                else:
+                    self._two_factor_info = None #clear 2FA info since we just completed 2FA successfully. 
+                    return await self._attempt_client_login(data_or_error)
 
-        This function may be called multiple times when the user is logging in, depending on 2FA or failed login attempts.
-        """
-        await self._controller.pass_login_credentials(self, credentials, cookies)
+    async def _handle_confirmation_result(self):
+        authentication_data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, True)
+        if isinstance(authentication_data_or_error, ModelAuthPollResult):
+            auth_data = cast(ModelAuthPollResult, authentication_data_or_error)
+            return await self._attempt_client_login(auth_data)
+        else:
+            return self._view.mobile_confirmation_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, authentication_data_or_error))
+
+    async def _handle_retrieve_rsa_result(self, credentials: Dict[str, str])  -> Union[Authentication, NextStep]:
+        self._use_paranoid_login = True
+
+        username_or_display = self._view.retrieve_data_paranoid_username(credentials)
+        if isinstance(username_or_display, NextStep):
+            return username_or_display
+        username = cast(str, username_or_display)
+        key_or_error = await self._model.retrieve_rsa_key(username)
+        if isinstance(key_or_error, SteamPublicKey):
+            key_data = cast(SteamPublicKey, key_or_error)
+            return self._view.paranoid_username_success(username, key_data.rsa_public_key, key_data.timestamp)
+        else:
+            return self._view.paranoid_username_failed(cast(ModelAuthError, key_or_error))
+
+    async def _handle_manual_deciphering_result(self, credentials: Dict[str, str])  -> Union[Authentication, NextStep]:
+        fallback_or_data = self._view.retrieve_data_paranoid_pt2(credentials)
+        if (isinstance(fallback_or_data, NextStep)):
+            return fallback_or_data
+        (username, enciphered_password, timestamp) = cast(Tuple[str, bytes, int], fallback_or_data)
+        return await self._do_common_credential_login(username, enciphered_password, timestamp, True)
+
+    async def _do_common_credential_login(self, username : str, enciphered_password : bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]: #testing, needs revert. 
+        two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp) #testing, needs revert
+        if isinstance(two_factor_data_or_error, ModelAuthCredentialData):
+            self._two_factor_info = cast(ModelAuthCredentialData, two_factor_data_or_error)
+            self._unauthed_steam_id = self._two_factor_info.steam_id
+
+            auth_methods = self._two_factor_info.allowed_authentication_methods
+            if not auth_methods or not auth_methods[0] or auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown:
+                logger.exception("Login appeared successful, but no two factor methods were returned or an the return method was unknown. Login therefore failed.")
+                raise UnknownBackendResponse()
+            elif (auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_None):
+                logger.info("User does not require SteamGuard for authentication. Attempting to confirm this.")
+                self._two_factor_info = None #clear it since we're done with 2FA.
+                return await self._handle_steam_guard_none() #testing, needs revert. 
+            else:
+                return self._view.login_success_has_2fa(auth_methods)
+        else:
+            error = cast(ModelAuthError, two_factor_data_or_error)
+            if is_paranoid_user_result:
+                logger.info("login with manual enciphered password failed.")
+                return self._view.paranoid_pt2_failed(error)
+            else:
+                logger.info("login with credentials failed.")
+                return self._view.login_failed(error)
+
+    async def _handle_steam_guard_none(self) -> Authentication:
+        authentication_data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, False)
+        if isinstance(authentication_data_or_error, ModelAuthPollResult):
+            return await self._attempt_client_login(authentication_data_or_error)
+        else:
+            logging.exception("Authentication poll failed despite the user not having 2FA. This is not recoverable.")
+            raise UnknownBackendResponse()
+
+    async def _attempt_client_login(self, poll_result: ModelAuthPollResult) -> Authentication:
+        auth = await self._attempt_client_login_common(self._unauthed_steam_id, poll_result.account_name, poll_result.refresh_token)
+        if (auth is None):
+            logger.warning("Client Login failed despite credential login succeeding. Nothing to fall back to.")
+            raise UnknownBackendResponse()
+        else:
+            return auth
+
+    async def _attempt_client_login_common(self, steam_id: int, account_name:str, refresh_token: str) -> Optional[Authentication]:
+        maybe_auth_data = await self._model.steam_client_login(account_name, steam_id, refresh_token, get_os())
+        if (maybe_auth_data is None):
+            return None
+        else:
+            return Authentication(str(steam_id), account_name)
+
+    def tick(self):
+        self._model.tick()
+        pass
 
     async def shutdown(self):
         """Called when GOG Galaxy Client is shutdown or the plugin is disconnected by the user. 
         """
-        await self._controller.shutdown()
+        await self._model.shutdown()
         pass
 
     #endregion End startup, login, and shutdown. 
     #region owned games and subscriptions
     async def get_owned_games(self) -> List[Game]:
-        """ Get a list of games the user currently owns. Passed to controller.
-
-        This is not a generator, i'm not sure why.
-        """
-        return await self._controller.get_owned_games()
+        return await self._model.get_owned_games()
 
     async def get_subscriptions(self) -> List[Subscription]:
-        """ Get a list of subscriptions sources the user currently subscribes to. This is not the games themselves. 
-
-        This is just the steam family share as far as i can tell. 
-        """
         return [Subscription(FAMILY_SHARE, True, None, SubscriptionDiscovery.AUTOMATIC)] #defaults to you have it, even if it's no games.
-        #return [Subscription(FAMILY_SHARE, None, None, SubscriptionDiscovery.AUTOMATIC)] #legal but i have no idea what happens. 
 
     async def prepare_subscription_games_context(self, subscription_names: List[str]) -> None:
-        """ Start a batch process to get all subscription games for the list of available subscription sources.
-
-        For Steam, there is only one source of subscriptions: Steam Family Share. This is the only one we need to process.
-        Steam has one call that obtains all games at once, whether they are owned or subscription; however, it does tell us which a given game is.
-        Preparing for subscription games will also begin preparing for owned games, and vice versa. \
-If preparations for one of these functions has been started when the other is called, this call will have no effect.
-        """
         if ("Steam Family Share" in subscription_names):
-            await self._controller.prepare_family_share()
+            await self._model.prepare_family_share()
 
-    #note to self, raise StopIterator to kill a generator. StopAsyncIterator is the async equivalent. there is no "yield break" in python.
-    
     async def get_subscription_games(self, subscription_name: str, _: None) -> AsyncGenerator[List[SubscriptionGame], None]:
-        """ Get a list of games asynchronously that the user has subscribed to.
-        
-        If the string is not "Steam Family Share" this value will return nothing. Context is unused. 
-        """
         if (subscription_name != FAMILY_SHARE):
             raise StopAsyncIteration
         else:
             #can i just return the async generator itself? idk. so i'll just do this.
-            async for item in self._controller.get_family_share_games():
+            async for item in self._model.get_family_share_games():
                 await item
 
     def subscription_games_import_complete(self):
-        """ Updates all the imported games so they are written to the database cache.
-
-        This is called after all subscription games are successfully imported. 
-        """
-        self._controller.subscription_games_import_complete()
+        self._model.subscription_games_import_complete()
 
     #endregion
     #region Achievements
@@ -163,50 +290,50 @@ If preparations for one of these functions has been started when the other is ca
 
         Games are imported one at a time because a batch import does not exist. Context is therefore None here. 
         """
-        return await self._controller.get_unlocked_achievements(int(game_id))
+        return await self._model.get_unlocked_achievements(int(game_id))
 
     def achievements_import_complete(self):
         """Called when get_unlocked_achievements has been called on all game_ids. 
         """
-        self._controller.achievements_import_complete()
+        self._model.achievements_import_complete()
     #endregion
     #region Play Time
     async def prepare_game_times_context(self, game_ids: List[str]) -> None:
-        await self._controller.prepare_game_times_context(map(lambda x:int(x), game_ids))
+        await self._model.prepare_game_times_context(map(lambda x:int(x), game_ids))
 
     async def get_game_time(self, game_id: str, _: None) -> GameTime:
-        return await self._controller.get_game_time(int(game_id))
+        return await self._model.get_game_time(int(game_id))
 
     def game_times_import_complete(self):
-        self._controller.game_times_import_complete()
+        self._model.game_times_import_complete()
     #endregion
     #region User-defined settings applied to their games
     async def prepare_game_library_settings_context(self, game_ids: List[str]) -> None:
-        await self._controller.begin_get_tags_hidden_etc(map(lambda x: int(x), game_ids))
+        await self._model.begin_get_tags_hidden_etc(map(lambda x: int(x), game_ids))
 
     async def get_game_library_settings(self, game_id: str, _: None) -> GameLibrarySettings:
         return await self.get_tags_hidden_etc(int(game_id))
 
     def game_library_settings_import_complete(self):
-        self._controller.tags_hidden_etc_import_complete()
+        self._model.tags_hidden_etc_import_complete()
     #endregion
     #region friend info
     async def get_friends(self) -> List[UserInfo]:
-        return await self._controller.get_friends()
+        return await self._model.get_friends()
 
     async def prepare_user_presence_context(self, user_ids: List[str]) -> None:
-        await self._controller.prepare_user_presence(self, map(lambda x: int(x), user_ids))
+        await self._model.prepare_user_presence(self, map(lambda x: int(x), user_ids))
 
     async def get_user_presence(self, user_id: str, _: None) -> UserPresence:
-        return await self._controller.get_user_presence(int(user_id))
+        return await self._model.get_user_presence(int(user_id))
 
     def user_presence_import_complete(self):
-        self._controller.user_presence_import_complete()
+        self._model.user_presence_import_complete()
     #endregion
 
-    def tick(self):
-        self._controller.tick()
-        pass
+    
+
+    #region Local Game data 
     async def get_local_games(self):
         return await asyncio.get_running_loop().run_in_executor(None, self.local.latest)
 
@@ -233,7 +360,7 @@ If preparations for one of these functions has been started when the other is ca
             logging.info("Ignoring shutdown request because game was launched a moment ago")
             return
         await self.local.steam_shutdown()
-
+    #endregion
 
 def main():
     """ Program entry point. starts the entire plugin. 

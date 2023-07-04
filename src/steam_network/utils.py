@@ -12,7 +12,7 @@ from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
 
 from typing import Optional
 
-from .protocol.consts import EOSType, EResult
+from .protocol.steam_client_enumerations import EOSType, EResult
 import logging
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def get_os() -> EOSType:
     return EOSType.Unknown
 
 
-def translate_error(result: EResult):
+def translate_error(result: EResult) -> Exception:
     if isinstance(result, int):
         result = EResult(result)
     logger.error("Error Received: " + result.name)

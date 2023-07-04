@@ -107,8 +107,7 @@ from .messages.steammessages_webui_friends import (
     CCommunity_GetAppRichPresenceLocalization_Response,
 )
 
-from .steam_types import SteamId, ProtoUserInfo
-from .consts import EMsg, EResult
+from .steam_client_enumerations import EMsg, EResult
 
 
 logger = logging.getLogger(__name__)
@@ -183,10 +182,11 @@ class ProtocolParser:
     _MSG_PROTOCOL_VERSION = 65580
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
-    def __init__(self, socket: WebSocketClientProtocol, queue : asyncio.Queue):
+    def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue : asyncio.Queue):
         self._future_lookup: Dict[int, FutureInfo] = {}
         self._job_id_iterator: Iterator[int] = count(1) #this is actually clever. A lazy iterator that increments every time you call next.
         self.confirmed_steam_id : Optional[int] = None
+        self._socket_uri = socket_uri
         self._socket : WebSocketClientProtocol = socket
         self._queue: asyncio.Queue = queue
         self._future_lookup: Dict[int, FutureInfo] = {}
@@ -196,6 +196,10 @@ class ProtocolParser:
         self._session_id : Optional[int] = None
         self.confirmed_steam_id : Optional[int] = None
         pass
+
+    @property
+    def socket_uri(self):
+        return self._socket_uri
 
     async def run(self):
         """Run the websocket receive loop asynchronously. 
@@ -318,11 +322,6 @@ class ProtocolParser:
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
-    #steam gives us a log off message that we didn't expect. This normally happens if we idle too long without sending them anything. 
-    async def _handle_unsolicited_LogOff(self):
-        pass
-    #TODO: IMPLEMENT ME!
-
     #forget this authorization. Used when the user hits "disconnect" All calls after this will fail. Should be called immediately before LogOff.
     #as of this writing there is no hook for "disconnect" so this isn't used.
     #async def RevokeRefreshToken(self) -> ProtoResult[CAuthentication_RefreshToken_Revoke_Response]:
@@ -335,8 +334,8 @@ class ProtocolParser:
         return ProtoResult(header.eresult, header.error_message, CMsgClientGetUserStatsResponse().parse(response))
 
     #get user license information
-    async def PICSProductInfo_from_licenses(self, steam_licenses: List[SteamLicense]) -> ProtoResult[CMsgClientPICSProductInfoResponse]:
-        logger.info("Sending call %s with %d package_ids", repr(EMsg.ClientPICSProductInfoRequest), len(steam_licenses))
+    async def PICSProductInfo_from_licenses(self, steam_licenses: List[CMsgClientLicenseListLicense]) -> ProtoResult[CMsgClientPICSProductInfoResponse]:
+        logger.info("Sending call %s with %d package_ids", EMsg.ClientPICSProductInfoRequest.name, len(steam_licenses))
         message = CMsgClientPICSProductInfoRequest()
 
         message.packages = list(map(lambda x: CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token), steam_licenses))
@@ -361,7 +360,6 @@ class ProtocolParser:
         header, resp_bytes = await self._send_recv_service_message(message, GET_APP_RICH_PRESENCE, next(self._job_id_iterator))
         return ProtoResult(header.eresult, header.error_message, CCommunity_GetAppRichPresenceLocalization_Response().parse(resp_bytes))
 
-
     async def Store_Download(self) -> ProtoResult[CCloudConfigStore_Download_Response]:
         message = CCloudConfigStore_Download_Request()
         message_inside = CCloudConfigStore_NamespaceVersion()
@@ -370,20 +368,19 @@ class ProtocolParser:
         header, resp_bytes = await self._send_recv_service_message(message, CLOUD_CONFIG_DOWNLOAD, next(self._job_id_iterator))
         return ProtoResult(header.eresult, header.error_message, CCloudConfigStore_Download_Response().parse(resp_bytes))
 
-
-    #danger
     async def GetLastPlayedTimes(self) -> ProtoResult[CPlayer_GetLastPlayedTimes_Response]:
-        pass
-
-    #legally cannot say
-    async def close(self, send_log_off):
+        logger.info("Importing game times")
+        message = CPlayer_GetLastPlayedTimes_Request(0)
+        header, resp_bytes = await self._send_recv_service_message(message, GET_LAST_PLAYED_TIMES, next(self._job_id_iterator))
+        return ProtoResult(header.eresult, header.error_message, CPlayer_GetLastPlayedTimes_Response().parse(resp_bytes))
+        
+    async def close(self, send_log_off: bool):
         if send_log_off:
-            await self.send_log_off_message()  # method name doesn't resolve to anything, pls fix
+            await self.LogOff_no_wait()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
         for fi in self._future_lookup.values():
             fi.future.cancel()
-    
 
     async def _generate_header(self, job_id: int, target_job_id : Optional[int] = None, job_name: Optional[str] = None, override_steam_id : Optional[int] = None) -> CMsgProtoBufHeader:
         """Generate the protobuf header that the send functions require.
@@ -480,7 +477,6 @@ class ProtocolParser:
 
         return await self._send_recv_common(msg, job_id, um_generate_future, target_job_id, send_recv_name)
 
-
     async def _send_recv(self, msg: Message, send_type: EMsg, expected_return_type: EMsg, job_id: int, target_job_id : Optional[int] = None, 
                          job_name: Optional[str] = None, override_steam_id:Optional[int] = None) -> Tuple[CMsgProtoBufHeader, bytes]:
         def normal_generate_future(future: Future) -> FutureInfo:
@@ -562,11 +558,12 @@ class ProtocolParser:
         logger.debug("Finished processing message Multi")
 
     async def _handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes):
-        #await self._queue.put((emsg, header, body)) #send it to the queue so the task cache can handle it. 
-        #await asyncio.sleep(0.01)
-        pass
-        #TODO: Migration: do the protobuf_client regular parsing here. you will likely need to copypasta a lot of parse code from the protobuf_client. in the future, this is put into the "cache queue" which then pulls and parses it. but cache isn't implemented. 
+        """ Pass an unsolicited message to the local persistent cache to handle it there. This frees us up to keep reading messages
 
+        In doing so, we also prevent the protobuf socket handler's run task from hitting unexpected errors. Those errors are now thrown in by the local persistent cache instead.
+        """
+        await self._queue.put((emsg, header, body)) #send it to the queue so the cache can handle it. 
+        await asyncio.sleep(0.01)
 
     #old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow. 
     async def _get_obfuscated_private_ip(self) -> int:

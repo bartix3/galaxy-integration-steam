@@ -7,22 +7,15 @@ from asyncio import Future
 
 from rsa import PublicKey
 
-from .steam_public_key import SteamPublicKey
-from .steam_auth_polling_data import SteamPollingData
-
 from .caches.local_machine_cache import LocalMachineCache
 from .caches.friends_cache import FriendsCache
 from .caches.games_cache import GamesCache, App, SteamLicense, SteamPackage
 from .caches.stats_cache import StatsCache, Achievement, Stat
-from .caches.user_info_cache import UserInfoCache
 from .caches.times_cache import TimesCache
 
-from .authentication_data import AuthenticationData
-
 from .protocol.protobuf_client import ProtobufClient
-from .protocol.consts import EResult, EFriendRelationship, EPersonaState
+from .protocol.steam_client_enumerations import EResult, EFriendRelationship, EPersonaState
 
-from .enums import TwoFactorMethod, UserActionRequired, to_TwoFactorWithMessage, to_EAuthSessionGuardType
 from .utils import get_os, translate_error
 
 
@@ -233,19 +226,10 @@ class ProtocolClient:
             #ok just means the poll was successful. it doesn't tell us if we logged in. The only way i know of to check that is the refresh token having data. 
             if (data.refresh_token):
                 self._auth_lost_handler = auth_lost_handler
-                #uint64 new_client_id = 1 [(description) = "if challenge is old, this is the new client id"];
-                #string new_challenge_url = 2 [(description) = "if challenge is old, this is the new challenge ID to re-render for mobile confirmation"];
-                #string refresh_token = 3 [(description) = "if login has been confirmed, this is the requestor's new refresh token"];
-                #string access_token = 4 [(description) = "if login has been confirmed, this is a new token subordinate to refresh_token"];
-                #bool had_remote_interaction = 5 [(description) = "whether or not the auth session appears to have had remote interaction from a potential confirmer"];
-                #string account_name = 6 [(description) = "account name of authenticating account, for use by UI layer"];
-                #string new_guard_data = 7 [(description) = "if login has been confirmed, may contain remembered machine ID for future login"];
-                #string agreement_session_url = 8 [(description) = "agreement the user needs to agree to"];
 
                 self._user_info_cache.refresh_token = data.refresh_token
                 self._user_info_cache.persona_name = data.account_name
                 self._user_info_cache.access_token = data.access_token
-                #self._user_info_cache.guard_data = data.new_guard_data #seems to not be required.
                 
                 return (UserActionRequired.NoActionConfirmToken, data.new_client_id)
             else:

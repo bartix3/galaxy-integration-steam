@@ -1,3 +1,11 @@
+""" steam_client_enumerations.py
+
+A collection of enumerations that steam uses with their protobuf messages but leaves as an integer in the proto fields. 
+It is far more useful to use these than their magic number equivalents. 
+
+If i had to guess, steam does not include these enums in their proto definitions because they are massive and would bloat the file size.
+"""
+
 import enum
 
 
@@ -5,6 +13,9 @@ STEAM_CLIENT_APP_ID = 7
 
 
 class EMsg(enum.IntEnum):
+    """The identifier for the message being sent or received.
+
+    """
     Invalid = 0
     Multi = 1
     ProtobufWrapped = 2
@@ -1651,6 +1662,8 @@ class EMsg(enum.IntEnum):
 
 
 class EResult(enum.IntEnum):
+    """ The resut state of a message sent or received to/from steam.
+    """
     Invalid = 0
     OK = 1
     Fail = 2
@@ -1778,6 +1791,8 @@ class EResult(enum.IntEnum):
 
 
 class EPersonaState(enum.IntEnum):
+    """ State of a friend or other user a given user is associated with.
+    """
     Offline = 0
     Online = 1
     Busy = 2
@@ -1789,6 +1804,8 @@ class EPersonaState(enum.IntEnum):
 
 
 class EAccountType(enum.IntEnum):
+    """ Account type
+    """
     Invalid = 0
     Individual = 1
     Multiseat = 2
@@ -1803,6 +1820,8 @@ class EAccountType(enum.IntEnum):
 
 
 class EFriendRelationship(enum.IntEnum):
+    """ The relationship between the user and a (potential) friend.
+    """
     None_ = 0
     Blocked = 1
     RequestRecipient = 2
@@ -1814,6 +1833,8 @@ class EFriendRelationship(enum.IntEnum):
 
 
 class EOSType(enum.IntEnum):
+    """ The unique identifier steam uses internally for the user's operating system.
+    """
     Unknown = -1
     Web = -700
     IOSUnknown = -600

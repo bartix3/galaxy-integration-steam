@@ -385,7 +385,7 @@ class SteamNetworkBackend(BackendInterface):
         try:
             async for app in self._games_cache.get_apps(type_="game", shared=False):
                 dlcs: List[Dlc] = list()
-                for dlc in self._games_cache.get_dlcs_for_game(int(app.appid)):
+                for dlc in self._games_cache.get_dlcs_for_game(app.appid):
                     dlcs.append(Dlc(
                         dlc_id=dlc.appid,
                         dlc_title=dlc.title,

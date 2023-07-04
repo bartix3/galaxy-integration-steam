@@ -1,8 +1,7 @@
 from galaxy.api.consts import PresenceState
 from galaxy.api.types import UserPresence
 
-from .protocol.consts import EPersonaState
-from .protocol.steam_types import ProtoUserInfo
+from .protocol.steam_client_enumerations import EPersonaState
 
 import re
 import logging

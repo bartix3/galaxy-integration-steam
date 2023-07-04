@@ -67,7 +67,7 @@ class ModelAuthError(NamedTuple):
     steam_error_message: str
 
 
-class ModelAuthPollError(ModelAuthError):
+class ModelAuthPollError(ModelAuthError, NamedTuple):
     new_client_id: int
 
 #RSA Result : 
@@ -143,12 +143,11 @@ class ModelAuthCredentialData():
 class ModelAuthPollResult(NamedTuple):
     client_id: int
     account_name: str
-    confirmed_steam_id: int
     refresh_token: str
 
 
 class ModelAuthClientLoginResult(NamedTuple):
-    pass
+    confirmed_steam_id: int
 
 
 #Model Auth for token is just essentially a true/false. Since we return a ModelAuthError on false, we can just make that optional. 
