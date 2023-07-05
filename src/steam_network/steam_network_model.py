@@ -2,8 +2,12 @@ import asyncio
 from asyncio.futures import Future
 from asyncio import Task
 import ssl
-from typing import Callable, Iterable, Optional, Any, Dict, Union, cast, List, AsyncGenerator
+import json
+import vdf
 
+from typing import Callable, Iterable, Optional, Any, Dict, Union, cast, List, AsyncGenerator, Set
+
+from galaxy.api.types import Achievement, Authentication, Dlc, Game, GameLibrarySettings, GameTime, NextStep, Subscription, SubscriptionDiscovery, SubscriptionGame, UserInfo, UserPresence
 from galaxy.api.errors import BackendNotAvailable, BackendTimeout, BackendError, InvalidCredentials, NetworkError, AccessDenied, AuthenticationRequired
 
 import logging
@@ -12,6 +16,8 @@ from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import PublicKey
+
+from steam_network.protocol.messages.service_cloudconfigstore import CCloudConfigStore_Download_Response
 
 from .mvc_classes import ModelAuthError, SteamPublicKey, ModelAuthCredentialData, ModelAuthPollResult, ModelAuthClientLoginResult, ModelAuthPollError, AuthErrorCode
 from .protocol.protobuf_socket_handler import ProtocolParser, FutureInfo, ProtoResult
@@ -268,7 +274,48 @@ class SteamNetworkModel:
     #region Achievements
 
     async def get_unlocked_achievements(self, game_id: int) -> List[Achievement]:
-        pass
+        achievs : List[Achievement] = []
+        result = await self._parser.GetUserStats(game_id)
+        if (result.eresult == EResult.OK):
+            data = result.body
+
+            #anyone have a clue why we're doing this nonsense?
+            schema = vdf.binary_loads(data.schema, merge_duplicate_keys=False)
+
+            def get_achievement_name(block_schema: dict, bit_no: int) -> str:
+                name = block_schema['bits'][str(bit_no)]['display']['name']
+                if type(name) is dict:
+                    return name["english"]
+                elif isinstance(name, str):
+                    return name
+                else:
+                    return str(name)
+
+            for achievement_block in data.achievement_blocks:
+                block_id = str(achievement_block.achievement_id)
+                try:
+                    stats_block_schema = schema['stats'][block_id]
+                except KeyError:
+                    logger.warning("No stat schema for block %s for game: %s", block_id, game_id)
+                    continue
+
+                for i, unlock_time in enumerate(achievement_block.unlock_time):
+                    if unlock_time > 0:
+                        try:
+                            display_name = get_achievement_name(stats_block_schema, i)
+                        except KeyError:
+                            logger.warning("Unexpected schema for achievement bit %d from block %s for game %s: %s",
+                                i, block_id, game_id, stats_block_schema
+                            )
+                            continue
+
+                        achievs.append(Achievement(
+                            id_=32 * (achievement_block.achievement_id - 1) + i,
+                            name=display_name,
+                            unlock_time=int(unlock_time),
+                        ))
+
+        return achievs
 
     def achievements_import_complete(self):
         pass
@@ -286,11 +333,34 @@ class SteamNetworkModel:
 
     #endregion
     #region User-defined settings applied to their games
-    async def begin_get_tags_hidden_etc(self, game_ids: Iterable[int]) -> None:
-        pass
+    async def begin_get_tags_hidden_etc(self) ->  Dict[str, Set[int]]:
+        result = await self._parser.ConfigStore_Download()
+        tag_lookup: Dict[str, Set[int]] = {}
 
-    async def get_game_library_settings(self, game_id: int) -> GameLibrarySettings:
-        pass
+        if (result.eresult == EResult.OK):
+            response : CCloudConfigStore_Download_Response = result.body
+            for data in response.data:
+                for entry in data.entries:
+                    try:
+                        loaded_val :Dict[str, Any] = json.loads(entry.value)
+                        tag_lookup[loaded_val['name']] = set(loaded_val['added'])
+                    except:
+                        pass
+
+        return tag_lookup
+
+    async def get_tags_hidden_etc(self, game_id: int, tag_lookup: Dict[str, Set[int]]) -> GameLibrarySettings:
+        game_tags: List[str] = []
+        hidden: bool = False
+        if (tag_lookup):
+            for tag, games in tag_lookup.items():
+                if game_id in games:
+                    if (tag == 'hidden'):
+                        hidden = True
+                    else:
+                        game_tags.append(tag)
+
+        return GameLibrarySettings(str(game_id), game_tags, hidden)
 
     def tags_hidden_etc_import_complete(self):
         pass

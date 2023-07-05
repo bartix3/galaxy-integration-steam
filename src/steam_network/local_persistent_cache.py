@@ -51,6 +51,14 @@ class LocalPersistentCache:
         #raise an error. Our parent task (the run loop in model) will catch this, shut down the socket, reconnected to steam's servers, and restart these tasks if it is able to do so.
         raise translate_error(result)
 
+    async def close(self):
+        raise NotImplementedError()
+
+    def get_machine_id(self):
+        raise NotImplementedError()
+
+
+
 
 
 

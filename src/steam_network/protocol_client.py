@@ -2,7 +2,7 @@ import asyncio
 import logging
 import secrets
 
-from typing import Callable, List, Optional, Tuple, Dict, Iterable
+from typing import Callable, List, Optional, Tuple, Dict, Iterable, Any
 from asyncio import Future
 
 from rsa import PublicKey
@@ -296,7 +296,7 @@ class ProtocolClient:
         self._protobuf_client.job_list.append({"job_name": "import_game_times"})
         #pass
 
-    async def retrieve_collections(self):
+    async def retrieve_collections(self) -> Dict[str, Any]:
         self._protobuf_client.job_list.append({"job_name": "import_collections"})
         await self._protobuf_client.collections['event'].wait()
         collections = self._protobuf_client.collections['collections'].copy()
@@ -380,9 +380,6 @@ class ProtocolClient:
                 return name['english']
             except TypeError:
                 return name
-
-        def get_stat_name(block_schema: Dict) -> str:
-            return block_schema["display"]["name"] or block_schema["name"]
 
         logger.debug(f"Processing user stats response for {game_id}")
 

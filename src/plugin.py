@@ -18,7 +18,7 @@ import asyncio
 import logging
 import sys
 import time
-from typing import Any, AsyncGenerator, Dict, List, NewType, Optional, Tuple, Union, cast
+from typing import Any, AsyncGenerator, Dict, List, NewType, Optional, Tuple, Union, cast, Set
 
 import certifi
 from galaxy.api.consts import Platform
@@ -308,11 +308,11 @@ class SteamPlugin(Plugin):
         self._model.game_times_import_complete()
     #endregion
     #region User-defined settings applied to their games
-    async def prepare_game_library_settings_context(self, game_ids: List[str]) -> None:
-        await self._model.begin_get_tags_hidden_etc(map(lambda x: int(x), game_ids))
+    async def prepare_game_library_settings_context(self, _: List[str]) -> Dict[str, Set[int]]:
+        return await self._model.begin_get_tags_hidden_etc()
 
-    async def get_game_library_settings(self, game_id: str, _: None) -> GameLibrarySettings:
-        return await self.get_tags_hidden_etc(int(game_id))
+    async def get_game_library_settings(self, game_id: str, tag_lookup: Dict[str, Set[int]]) -> GameLibrarySettings:
+        return await self._model.get_tags_hidden_etc(int(game_id), tag_lookup)
 
     def game_library_settings_import_complete(self):
         self._model.tags_hidden_etc_import_complete()

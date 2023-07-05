@@ -12,7 +12,7 @@ When parsing the login token call, if it is successful, you must call on_login_s
 
 
 import asyncio
-from asyncio import Future
+from asyncio import Future, Task
 
 from typing import Dict, NamedTuple, Tuple, Optional, List, Iterator, Callable, TypeVar, Generic, Union
 from betterproto import Message
@@ -28,7 +28,7 @@ from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from websockets.typing import Data
 
- 
+from betterproto import Message
 
 from .consts import EMsg, EResult, EAccountType, EFriendRelationship, EPersonaState
 
@@ -185,7 +185,6 @@ class ProtocolParser:
     def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue : asyncio.Queue):
         self._future_lookup: Dict[int, FutureInfo] = {}
         self._job_id_iterator: Iterator[int] = count(1) #this is actually clever. A lazy iterator that increments every time you call next.
-        self.confirmed_steam_id : Optional[int] = None
         self._socket_uri = socket_uri
         self._socket : WebSocketClientProtocol = socket
         self._queue: asyncio.Queue = queue
@@ -195,6 +194,7 @@ class ProtocolParser:
         #guarenteed to not be null unless the 
         self._session_id : Optional[int] = None
         self.confirmed_steam_id : Optional[int] = None
+        self._heartbeat_task: Optional[Task[None]] = None
         pass
 
     @property
@@ -302,6 +302,21 @@ class ProtocolParser:
 
         return ProtoResult(header.eresult, header.error_message, CMsgClientLogonResponse().parse(resp_bytes))
 
+    def on_TokenLogOn_success(self, confirmed_steam_id: int, heartbeat_interval: float):
+        self.confirmed_steam_id = confirmed_steam_id
+        self._heartbeat_task = asyncio.create_task(self._heartbeat(heartbeat_interval))
+
+    async def _heartbeat(self, interval: float):
+        #these messages will be sent over and over, no need to recreate the data each time. So we're building a bytes object and sending that each time.
+        message = CMsgClientHeartBeat(False)
+        header = self._generate_header(None) #leave the job id unset so we don't rapidly increase our counter.
+        data = self._generate_message(header, message, EMsg.ClientHeartBeat)
+
+        while True:
+            await self._socket.send(data) 
+            await asyncio.sleep(interval)
+
+
     #log off and read the response. We don't actually care about the response so this is not used atm.
     async def LogOff(self) -> ProtoResult[CMsgClientLoggedOff]:
         message = CMsgClientLogOff()
@@ -328,6 +343,7 @@ class ProtocolParser:
     #    pass
 
     #get user stats
+    #USED BY ACHIEVEMENT IMPORT
     async def GetUserStats(self, game_id: int) -> ProtoResult[CMsgClientGetUserStatsResponse]:
         message = CMsgClientGetUserStats(game_id=game_id)
         header, response = await self._send_recv(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, next(self._job_id_iterator))
@@ -352,6 +368,7 @@ class ProtocolParser:
         header, resp_bytes = await self._send_recv(message, EMsg.ClientPICSProductInfoRequest, EMsg.ClientPICSProductInfoResponse, next(self._job_id_iterator))
         return ProtoResult(header.eresult, header.error_message, CMsgClientPICSProductInfoResponse().parse(resp_bytes))
 
+
     async def GetAppRichPresenceLocalization(self, app_id: int, language: str = "english") -> ProtoResult[CCommunity_GetAppRichPresenceLocalization_Response]:
 
         logger.info(f"Sending call for rich presence localization with {app_id}, {language}")
@@ -360,7 +377,7 @@ class ProtocolParser:
         header, resp_bytes = await self._send_recv_service_message(message, GET_APP_RICH_PRESENCE, next(self._job_id_iterator))
         return ProtoResult(header.eresult, header.error_message, CCommunity_GetAppRichPresenceLocalization_Response().parse(resp_bytes))
 
-    async def Store_Download(self) -> ProtoResult[CCloudConfigStore_Download_Response]:
+    async def ConfigStore_Download(self) -> ProtoResult[CCloudConfigStore_Download_Response]:
         message = CCloudConfigStore_Download_Request()
         message_inside = CCloudConfigStore_NamespaceVersion()
         message_inside.enamespace = 1
@@ -379,16 +396,19 @@ class ProtocolParser:
             await self.LogOff_no_wait()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
+        #TODO: not sure if i should do this. It'll work but i'll need to wrap every call in a try catch.
         for fi in self._future_lookup.values():
             fi.future.cancel()
 
-    async def _generate_header(self, job_id: int, target_job_id : Optional[int] = None, job_name: Optional[str] = None, override_steam_id : Optional[int] = None) -> CMsgProtoBufHeader:
+    #header and message generates are always called back to back. feel free to merge thes into one. 
+    def _generate_header(self, job_id: Optional[int], target_job_id : Optional[int] = None, job_name: Optional[str] = None, override_steam_id : Optional[int] = None) -> CMsgProtoBufHeader:
         """Generate the protobuf header that the send functions require.
 
         """
         proto_header = CMsgProtoBufHeader()
         
-        proto_header.jobid_source = job_id
+        if (job_id is not None):
+            proto_header.jobid_source = job_id
 
         if override_steam_id is not None:
             proto_header.steamid = override_steam_id
@@ -405,18 +425,22 @@ class ProtocolParser:
 
         return proto_header
 
+    def _generate_message(self, header: CMsgProtoBufHeader, msg : Message, emsg: EMsg) -> bytes:
+        head = bytes(header)
+        body = bytes(msg)
+        #provide the information about the message being sent before the header and body.
+        #Magic string decoded: < = little endian. 2I = 2 x unsigned integer. 
+        #emsg | proto_mask is the first UInt (describes what we are sending), length of header is the second UInt.
+        msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
+        return msg_info + head + body
+
     async def _send_no_wait(self, msg: Message, emsg: EMsg, job_id: int, target_job_id: Optional[int] = None, job_name: Optional[str] = None):
         """Send a message along the websocket. Do not expect a response. 
         
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
         """
         header = self._generate_header(job_id, target_job_id, job_name)
-        body = bytes(msg)
-        #provide the information about the message being sent before the header and body.
-        #Magic string decoded: < = little endian. 2I = 2 x unsigned integer. 
-        #emsg | proto_mask is the first UInt (describes what we are sending), length of header is the second UInt.
-        msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
-        data = msg_info + header + body
+        data = self._generate_message(header, msg, emsg)
         
         if LOG_SENSITIVE_DATA:
             logger.info("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
@@ -435,17 +459,12 @@ class ProtocolParser:
             future = loop.create_future()
             info : FutureInfo = callback(future)
             self._future_lookup[job_id] = info
-            header = self._generate_header(job_id, target_job_id, job_name, override_steam_id)
-            body = bytes(msg)
             emsg = info.sent_type
-            #provide the information about the message being sent before the header and body.
-            #Magic string decoded: < = little endian. 2I = 2 x unsigned integer. 
-            #emsg | proto_mask is the first UInt (describes what we are sending), length of header is the second UInt.
-            msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
-            data = msg_info + header + body
+            header = self._generate_header(job_id, target_job_id, job_name, override_steam_id)
+            data = self._generate_message(header, msg, emsg)
 
             if LOG_SENSITIVE_DATA:
-                logger.info("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
+                logger.info("[Out] %s (%dB), params:%s\n", repr(emsg), len(data), repr(msg))
             else:
                 logger.info("[Out] %s (%dB)", repr(emsg), len(data))
             await self._socket.send(data)

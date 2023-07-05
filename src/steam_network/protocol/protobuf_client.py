@@ -746,7 +746,7 @@ class ProtobufClient:
         for data in message.data:
             for entry in data.entries:
                 try:
-                    loaded_val = json.loads(entry.value)
+                    loaded_val :Dict[str, Any] = json.loads(entry.value)
                     self.collections['collections'][loaded_val['name']] = loaded_val['added']
                 except:
                     pass
