@@ -40,7 +40,7 @@ class ProtoResult(Generic[T]):
     #eresult is almost always an int because it's that way in the protobuf file, but it should be an enum. so expect it to be an int (and be pleasantly surprised when it isn't), but accept both.
     def __init__(self, eresult: Union[EResult, int], error_message: str, body: Optional[T]) -> None:
         if (isinstance(eresult, int)):
-            eresult = EResult(int)
+            eresult = EResult(eresult)
         self._eresult : EResult = eresult
         self._error_message = error_message
         self._body: Optional[T] = body

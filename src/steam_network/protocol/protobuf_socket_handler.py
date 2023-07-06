@@ -319,7 +319,7 @@ class ProtocolParser:
         logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
         message = CMsgClientPICSProductInfoRequest()
 
-        message.apps = list(map(lambda x: CMsgClientPICSProductInfoRequestAppInfo(x), app_ids))
+        message.apps = [CMsgClientPICSProductInfoRequestAppInfo(x) for x in app_ids]
 
         header, resp_bytes = await self._send_recv(message, EMsg.ClientPICSProductInfoRequest, EMsg.ClientPICSProductInfoResponse, next(self._job_id_iterator))
         return ProtoResult(header.eresult, header.error_message, CMsgClientPICSProductInfoResponse().parse(resp_bytes))

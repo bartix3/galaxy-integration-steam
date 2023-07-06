@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from typing import Awaitable, NamedTuple, Optional, cast, Tuple, Dict, Any, Callable, List
+from typing import Awaitable, NamedTuple, Optional, cast, Tuple, Dict, Any, Callable, Set
 from queue import LifoQueue
+
 
 from .caches.cache_base import CacheBase
 from .caches.friends_cache import FriendsCache
@@ -20,6 +21,8 @@ from .protocol.messages.steammessages_clientserver_login import (
     CMsgClientHeartBeat,
     CMsgClientHello,
     CMsgClientLoggedOff)
+from .protocol.messages.steammessages_clientserver import CMsgClientLicenseList
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ We still need a way to do something when that stack ends, so each entry in the s
 When we pop off this, we sequentially call each of these callbacks. callbacks can be asynchronous. 
     """
     multi_header: CMsgProtoBufHeader
-    on_multi_end_callbacks: List[Callable[[], Awaitable[None]]]
+    on_multi_end_callbacks: Set[Callable[[], Awaitable[None]]]
 
 
 class LocalPersistentCache:
@@ -47,7 +50,7 @@ class LocalPersistentCache:
 
     This cache does not store any sensitive user information, that is instead passed directly to gog's secure storage to handle. 
 
-    Note: you can 
+    Note: you can check the current multi a message is part of by peeking self._multi_stack. 
     """
     VERSION = "2.0.0"
 
@@ -74,7 +77,7 @@ class LocalPersistentCache:
     async def _process_multi_start_end(self, header: CMsgProtoBufHeader, is_end: bool):
         if (not is_end):
             if (len(self._multi_stack) > 0):
-                logger.warning("Stack not empty, we have nested multis. Not an error and if that's what steam gives us it's expected behavior, but it may lead to unexpected issues.")
+                logger.warning("Stack not empty, we now have nested multis. Not an error if that's what steam gives us, but it may lead to unexpected issues.")
             self._multi_stack.push(MultiHandler(header, []))
         else:
             if len(self._multi_stack) > 0:
@@ -83,6 +86,23 @@ class LocalPersistentCache:
                     await callback()
             else:
                 logger.exception("Stack was empty but got a multi end message")
+
+    async def _process_license_list(self, header: CMsgProtoBufHeader, body: bytes):
+        #license lists are sent as part of the client login response multi. It's possible steam may give us multiple of these if the user owns > 12k licenses,
+        #so we're forced to wait until that multi is processed. If we're lucky, the 12k+ licenses are themselves a nested multi but until we can confirm that it's better to be safe than sorry.
+        if len(self._multi_stack) > 0:
+            head = self._multi_stack.peek_first()
+            #since we use a set here i can just add it and duplicates won't be an issue. 
+            #This would be more complicated if this function captured variables (i.e. was a lambda or local function) but it doesn't for that very reason.
+            head.on_multi_end_callbacks.add(self._process_license_list_multi_finished) 
+
+        self._games_cache.prepare_for_server_packages()
+        message : CMsgClientLicenseList = CMsgClientLicenseList().parse(body)
+        self._games_cache.add_server_packages(map(lambda x: x.package_id, message.licenses))
+
+
+    async def _process_license_list_multi_finished(self):
+        await self._games_cache.finished_obtaining_server_packages()
 
 
     async def _process_client_logged_off(self, result: EResult):
