@@ -42,7 +42,7 @@ We still need a way to do something when that stack ends, so each entry in the s
 When we pop off this, we sequentially call each of these callbacks. callbacks can be asynchronous. 
     """
     multi_header: CMsgProtoBufHeader
-    on_multi_end_callbacks: Set[Callable[[], Awaitable[None]]]
+    on_multi_end_callbacks: Set[Callable[[CMsgProtoBufHeader], Awaitable[None]]]
 
 
 class LocalPersistentCache:
@@ -52,6 +52,9 @@ class LocalPersistentCache:
 
     Note: you can check the current multi a message is part of by peeking self._multi_stack. 
     """
+    
+    _ACCOUNT_ID_MASK = 0x0110000100000000
+    
     VERSION = "2.0.0"
 
     def __init__(self, cache: Dict[str, Any], queue: asyncio.Queue):
@@ -93,21 +96,33 @@ class LocalPersistentCache:
         if len(self._multi_stack) > 0:
             head = self._multi_stack.peek_first()
             #since we use a set here i can just add it and duplicates won't be an issue. 
-            #This would be more complicated if this function captured variables (i.e. was a lambda or local function) but it doesn't for that very reason.
+            #This would be more complicated if this function captured variables or didn't accept the provided prot header,
+            #but it's formatted spefically that way to not cause issues.
             head.on_multi_end_callbacks.add(self._process_license_list_multi_finished) 
 
         self._games_cache.prepare_for_server_packages()
         message : CMsgClientLicenseList = CMsgClientLicenseList().parse(body)
-        self._games_cache.add_server_packages(map(lambda x: x.package_id, message.licenses))
+        self._games_cache.add_server_packages(filter(lambda x: x.package_id != 0 and x.flags != 520, message.licenses))
 
+    def token_login_complete(self, confirmed_steam_id: int):
+        self._confirmed_steam_id = confirmed_steam_id
 
-    async def _process_license_list_multi_finished(self):
+    async def _process_license_list_multi_finished(self, _: CMsgProtoBufHeader):
         await self._games_cache.finished_obtaining_server_packages()
 
 
     async def _process_client_logged_off(self, result: EResult):
         #raise an error. Our parent task (the run loop in model) will catch this, shut down the socket, reconnected to steam's servers, and restart these tasks if it is able to do so.
         raise translate_error(result)
+
+    def _get_owner_id(self) -> Optional[int]:
+        if self._confirmed_steam_id == None:
+            return None
+        else:
+            #this should not be a subtract op if it's a true mask, it should likely be a NAND. but idk.
+            return int(self.confirmed_steam_id - self._ACCOUNT_ID_MASK)
+            #here's the NAND
+            #return int(self.confirmed_steam_id & ~self._ACCOUNT_ID_MASK)
 
     async def close(self):
         raise NotImplementedError()
