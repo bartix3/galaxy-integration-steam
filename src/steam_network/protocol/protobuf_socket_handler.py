@@ -14,7 +14,7 @@ When parsing the login token call, if it is successful, you must call on_login_s
 import asyncio
 from asyncio import Future, Task
 
-from typing import Dict, NamedTuple, Tuple, Optional, List, Iterator, Callable, TypeVar, Generic, Union
+from typing import Dict, Tuple, Optional, List, Iterator, Callable
 from betterproto import Message
 from itertools import count
 import logging
@@ -30,7 +30,8 @@ from websockets.typing import Data
 
 from betterproto import Message
 
-from .consts import EMsg, EResult, EAccountType, EFriendRelationship, EPersonaState
+from .steam_client_enumerations import EMsg, EResult
+from .message_helpers import MultiStartEnd, FutureInfo, ProtoResult
 
 from .messages.steammessages_base import (
     CMsgMulti,
@@ -107,9 +108,6 @@ from .messages.steammessages_webui_friends import (
     CCommunity_GetAppRichPresenceLocalization_Response,
 )
 
-from .steam_client_enumerations import EMsg, EResult
-
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 LOG_SENSITIVE_DATA = False
@@ -125,51 +123,6 @@ LOGIN_CREDENTIALS = "Authentication.BeginAuthSessionViaCredentials#1"
 UPDATE_TWO_FACTOR = "Authentication.UpdateAuthSessionWithSteamGuardCode#1"
 CHECK_AUTHENTICATION_STATUS = "Authentication.PollAuthSessionStatus#1"
 
-class FutureInfo(NamedTuple):
-    future: Future
-    sent_type: EMsg
-    expected_return_type: Optional[EMsg] #some messages are one-way, so these should not return anything. 
-    send_recv_name: Optional[str]
-
-    def is_expected_response(self, return_type:EMsg, target_name: Optional[str]) -> bool:
-        retVal, _ = self.is_expected_response_with_message(return_type, target_name)
-        return retVal
-
-    def is_expected_response_with_message(self, return_type:EMsg, target_name: Optional[str]) -> Tuple[bool, str]:
-        expected_return_type_str = self.expected_return_type.name if self.expected_return_type is not None else "<no response>"
-
-        if return_type == EMsg.ServiceMethod:
-            return_type = EMsg.ServiceMethodResponse
-
-        if (self.expected_return_type != return_type):
-            return (False, f"Message has return type {return_type.name}, but we were expecting {expected_return_type_str}. Treating as an unsolicited message")
-
-        elif (return_type == EMsg.ServiceMethodResponse and target_name is None or target_name != self.send_recv_name):
-            return (False, f"Received a service message, but not of the expected name. Got {target_name}, but we were expecting {self.send_recv_name}. Treating as an unsolicited message")
-
-        return (True, "")
-
-T = TypeVar("T", bound = Message)
-class ProtoResult(Generic[T]):
-    #eresult is almost always an int because it's that way in the protobuf file, but it should be an enum. so expect it to be an int (and be pleasantly surprised when it isn't), but accept both.
-    def __init__(self, eresult: Union[EResult, int], error_message: str, body: Optional[T]) -> None:
-        if (isinstance(eresult, int)):
-            eresult = EResult(int)
-        self._eresult : EResult = eresult
-        self._error_message = error_message
-        self._body: Optional[T] = body
-    
-    @property
-    def eresult(self):
-        return self._eresult
-
-    @property
-    def error_message(self):
-        return self._error_message
-
-    @property
-    def body(self):
-        return self._body
 
 class ProtocolParser:
     """ Wraps a websocket with all the information we need to successfully send and receive messages to Steam's servers.
@@ -195,6 +148,9 @@ class ProtocolParser:
         self._session_id : Optional[int] = None
         self.confirmed_steam_id : Optional[int] = None
         self._heartbeat_task: Optional[Task[None]] = None
+
+        self._cached_start_multi : bytes = bytes(MultiStartEnd(False))
+        self._cached_end_multi : bytes = bytes(MultiStartEnd(True))
         pass
 
     @property
@@ -537,7 +493,7 @@ class ProtocolParser:
     async def _process_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes):
         logger.info("[In] %d -> EMsg.%s", emsg.value, emsg.name)
         if emsg == EMsg.Multi:
-            await self._process_multi(body)
+            await self._process_multi(header, body)
         else:
             emsg = EMsg.ServiceMethodResponse if emsg == EMsg.ServiceMethod else emsg #make sure it't not borked if it's a solicited service message.
             header_jobid : int = int(header.jobid_source)
@@ -558,7 +514,10 @@ class ProtocolParser:
 
         await self._handle_unsolicited_message(emsg, header, body)
 
-    async def _process_multi(self, body: bytes):
+    async def _process_multi(self, header: CMsgProtoBufHeader, body: bytes):
+        #multis are annoying. To properly handle them, we're sending off a "start" and "end" message to the caching process run loop 
+        #sometimes we might get multi, it contains several of the same message, just with different data in each one
+        #we need to wait until we get all the data from these messages are processed before we can proceed. 
         logger.debug("Processing message Multi")
         message = CMsgMulti().parse(body)
         if message.size_unzipped > 0:
@@ -567,14 +526,23 @@ class ProtocolParser:
         else:
             data = message.message_body
 
+        emsg = EMsg.Multi
         data_size = len(data)
         offset = 0
         size_bytes = 4
+        packets_parsed = 0
         while offset + size_bytes <= data_size:
+            if (packets_parsed == 0):
+                await self._queue.put((emsg, header, self._cached_start_multi))
             size = int.from_bytes(data[offset:offset + size_bytes], "little")
             await self._process_packet(data[offset + size_bytes:offset + size_bytes + size])
             offset += size_bytes + size
+            packets_parsed += 1
+
         logger.debug("Finished processing message Multi")
+        if (packets_parsed > 0):
+            await self._queue.put((emsg, header, self._cached_end_multi))
+
 
     async def _handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes):
         """ Pass an unsolicited message to the local persistent cache to handle it there. This frees us up to keep reading messages

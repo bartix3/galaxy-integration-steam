@@ -52,6 +52,7 @@
     <Content Include="requirements\app.txt" />
     <Content Include="requirements\dev.txt" />
     <Content Include="requirements\install.txt" />
+    <Content Include="src\steam_network\protocol\message_helpers.py" />
     <Content Include="src\steam_network\web\css\style.css" />
     <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Light.ttf" />
     <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Regular.ttf" />

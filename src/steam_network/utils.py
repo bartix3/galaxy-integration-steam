@@ -5,12 +5,13 @@
 """
 import platform
 from traceback import format_exc, format_tb
+from queue import Empty
 
 from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
                                BackendTimeout, Banned, InvalidCredentials,
                                NetworkError, TemporaryBlocked, AuthenticationRequired, UnknownError)
 
-from typing import Optional
+from typing import Optional, Generic, List, TypeVar, Tuple
 
 from .protocol.steam_client_enumerations import EOSType, EResult
 import logging
@@ -129,3 +130,57 @@ def translate_error(result: EResult) -> Exception:
 
 def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
     return format_exc(limit) if getError else ''.join(format_tb(limit=limit))
+
+U = TypeVar("U")
+class Stack(Generic[U]):
+    """A very simple stack implementation that actually implements "peek". Is not even remotely thread-safe. 
+
+    The argument against peek being that the stack is not thread-safe if you peek is frankly silly. Python is inherently allergic to multi-threading as it is.
+    """
+    def __init__(self):
+        self._values : List[U] = []
+
+    def peek(self) -> U:
+        if len(self._values) == 0:
+            raise Empty
+        else:
+            return self._values[-1]
+
+    def peek_first(self) -> U:
+        if len(self._values) == 0:
+            raise Empty
+        else:
+            return self._values[0]
+
+    def pop(self) -> U:
+        if len(self._values) == 0:
+            raise Empty
+        else:
+            return self._values.pop()
+
+    def push(self, item: U):
+        self._values.append(item)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def try_peek(self) -> Tuple[bool, Optional[U]]:
+        if len(self._values) == 0:
+            return (False, None)
+        else:
+            return (True, self._values[-1])
+
+    def try_peek_first(self) -> Tuple[bool, Optional[U]]:
+        if len(self._values) == 0:
+            return (False, None)
+        else:
+            return (True, self._values[0])
+
+    def try_pop(self) -> Tuple[bool, Optional[U]]:
+        if len(self._values) == 0:
+            return (False, None)
+        else:
+            return (True, self._values.pop())
+
+    def to_list(self) -> List[U]:
+        return self._values.copy()
