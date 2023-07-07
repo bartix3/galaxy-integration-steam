@@ -278,9 +278,7 @@ class SteamPlugin(Plugin):
         if subscription_name != FAMILY_SHARE:
             raise StopAsyncIteration
         else:
-            # can i just return the async generator itself? idk. so i'll just do this.
-            async for item in self._model.get_family_share_games():
-                yield item
+            return await self._model.get_family_share_games()
 
     def subscription_games_import_complete(self):
         self._model.subscription_games_import_complete()
