@@ -1,14 +1,25 @@
 import betterproto
 
 from asyncio import Future
-from dataclasses import dataclass
-from typing import Generic, NamedTuple, Optional, Tuple, TypeVar, Union
+from typing import Awaitable, Callable, Generic, NamedTuple, Optional, Set, Tuple, TypeVar, Union
 
+from .messages.steammessages_base import CMsgProtoBufHeader
 from .steam_client_enumerations import EMsg, EResult
 
-@dataclass
-class MultiStartEnd(betterproto.Message):
-    is_end : bool = betterproto.bool_field(1)
+class MultiHandler(NamedTuple):
+    """ A special tuple for handling 'Multi' EMsgs. 
+    
+    Multi's are a huge headache because they may split up one "response" over multiple messages. 
+    Things that we need to fully process before proceeding will need to wait for *all* of these messages, \
+to properly ensure they are handled if the data is spread over multiple messages. 
+    Making matters worse, it's in theory possible for these Multi messages to be nested.
+
+    The solution is a LIFO Queue (aka Stack) that we push to when a multi starts and pop off when a multi ends. \
+We still need a way to do something when that stack ends, so each entry in the stack includes a list of callbacks. \
+When we pop off this, we sequentially call each of these callbacks. callbacks can be asynchronous. 
+    """
+    multi_header: CMsgProtoBufHeader
+    on_multi_end_callbacks: Set[Callable[[CMsgProtoBufHeader], Awaitable[None]]]
 
 
 class FutureInfo(NamedTuple):
@@ -56,3 +67,6 @@ class ProtoResult(Generic[T]):
     @property
     def body(self):
         return self._body
+
+class MessageLostException(BaseException):
+    pass

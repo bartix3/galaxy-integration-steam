@@ -82,6 +82,7 @@
     <Compile Include="src\steam_network\caches\__init__.py" />
     <Compile Include="src\steam_network\next_step_settings.py" />
     <Compile Include="src\steam_network\DEPRECATED_presence.py" />
+    <Compile Include="src\steam_network\protocol\protobuf_parser.py" />
     <Compile Include="src\steam_network\protocol\steam_client_enumerations.py" />
     <Compile Include="src\steam_network\protocol\messages\encrypted_app_ticket.py" />
     <Compile Include="src\steam_network\protocol\messages\enums.py" />
