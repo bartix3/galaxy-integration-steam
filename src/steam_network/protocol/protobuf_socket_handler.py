@@ -15,7 +15,6 @@ import ipaddress
 import logging
 import socket as sock
 import struct
-import traceback
 from asyncio import Future, Task
 from base64 import b64encode
 from itertools import count
@@ -382,9 +381,9 @@ class ProtobufSocketHandler:
         data = self._generate_message(header, msg, emsg)
 
         if LOG_SENSITIVE_DATA:
-            logger.debug("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
+            logger.info("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
         else:
-            logger.debug("[Out] %s (%dB)", repr(emsg), len(data))
+            logger.info("[Out] %s (%dB)", repr(emsg), len(data))
         await self._socket.send(data)
 
     async def _send_recv_common(self, msg: Message, job_id: int, callback: Callable[[Future], FutureInfo],
@@ -408,8 +407,7 @@ class ProtobufSocketHandler:
                 logger.info("[Out] %s (%dB)", repr(emsg), len(data))
             await self._socket.send(data)
         except Exception as e:
-            logger.error(f"Unexpected error sending the data: {e}")
-            logger.debug(traceback.format_exc())
+            logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
             if info is not None:
                 future.cancel()
                 self._future_lookup.pop(job_id)
@@ -422,8 +420,7 @@ class ProtobufSocketHandler:
             self._future_lookup.pop(job_id)
             return (header, data)
         except Exception as e:
-            logger.error(f"Unexpected error receiving the data: {e}")
-            logger.debug(traceback.format_exc())
+            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
             if info is not None:
                 future.cancel()
                 self._future_lookup.pop(job_id)

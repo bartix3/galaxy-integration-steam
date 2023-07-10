@@ -127,17 +127,15 @@ class SteamPlugin(Plugin):
             logger.error(f"Unexpected state {login_state:r} in pass_login_credentials")
             raise UnknownBackendResponse()
 
-    async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:  # todo revert when not testing.
+    async def _handle_login_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:
         self._use_paranoid_login = False
 
         data_or_error = self._view.retrieve_data_regular_login(credentials)
-        logger.debug("Got regular login data")
         if isinstance(data_or_error, NextStep):
             return data_or_error
 
         username, password = data_or_error
 
-        logger.debug("waiting for rsa key")
         key_or_error = await self._model.retrieve_rsa_key(username)  # revert
 
         if isinstance(key_or_error, SteamPublicKey):
@@ -204,21 +202,21 @@ class SteamPlugin(Plugin):
         username, enciphered_password, timestamp = cast(Tuple[str, bytes, int], fallback_or_data)
         return await self._do_common_credential_login(username, enciphered_password, timestamp, True)
 
-    async def _do_common_credential_login(self, username: str, enciphered_password: bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]:  # testing, needs revert.
-        two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp)  # testing, needs revert
+    async def _do_common_credential_login(self, username: str, enciphered_password: bytes, timestamp: int, is_paranoid_user_result: bool) -> Union[Authentication, NextStep]:
+        two_factor_data_or_error = await self._model.login_with_credentials(username, enciphered_password, timestamp)
         if isinstance(two_factor_data_or_error, ModelAuthCredentialData):
             self._two_factor_info = cast(ModelAuthCredentialData, two_factor_data_or_error)
             self._unauthed_steam_id = self._two_factor_info.steam_id
 
             auth_methods = self._two_factor_info.allowed_authentication_methods
-            if len(auth_methods) == 0 or auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown:
+            if not auth_methods or not auth_methods[0] or auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_Unknown:
                 logger.exception("Login appeared successful, but no two factor methods were returned or an the return method was unknown. Login therefore failed.")
                 raise UnknownBackendResponse()
 
             elif auth_methods[0].confirmation_type == EAuthSessionGuardType.k_EAuthSessionGuardType_None:
                 logger.info("User does not require SteamGuard for authentication. Attempting to confirm this.")
                 self._two_factor_info = None  # clear it since we're done with 2FA.
-                return await self._handle_steam_guard_none()  # testing, needs revert.
+                return await self._handle_steam_guard_none()
 
             else:
                 return self._view.login_success_has_2fa(auth_methods)

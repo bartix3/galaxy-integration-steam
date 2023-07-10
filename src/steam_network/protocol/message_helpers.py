@@ -72,5 +72,5 @@ class ProtoResult(Generic[T]):  # noqa: E302
         return self._body
 
 
-class MessageLostException(BaseException):
+class MessageLostException(Exception):
     pass
