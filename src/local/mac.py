@@ -86,14 +86,14 @@ class MacClient(BaseClient):
                                     yield app_id, v
                                     yielded.add(app_id)
                                     break
-                            
+
     def latest(self) -> List[LocalGame]:
         games = create_games_dict()
         for m in self.manifests():
             games[m.id()] = LocalGameState.Installed
         for id, state in self._states(self._contentlog.all_lines()):
             games[id] |= state
-        return [LocalGame(k,v) for k,v in games.items()]
+        return [LocalGame(k, v) for k, v in games.items()]
 
     def changed(self) -> Iterable[LocalGame]:
         return (LocalGame(id, v) for id, v in self._states(self._contentlog.new_lines()))
@@ -110,8 +110,7 @@ class MacClient(BaseClient):
         if bundle_id:
             return NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier_(bundle_id) is not None
         return False
-    
+
     @staticmethod
     def _get_steam_shutdown_cmd():
         return "osascript -e 'quit app \"Steam\"'"
-    
