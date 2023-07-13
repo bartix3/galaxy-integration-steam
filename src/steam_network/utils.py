@@ -3,6 +3,7 @@
 
 
 """
+from asyncio import Event
 import platform
 from traceback import format_exc, format_tb
 from queue import Empty
@@ -130,3 +131,25 @@ def translate_error(result: EResult) -> Exception:
 
 def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
     return format_exc(limit) if getError else ''.join(format_tb(limit=limit))
+
+
+T = TypeVar("T") 
+class GenericEvent(Event, Generic[T]):  # noqa: 302
+    def __init__(self):
+        super().__init__() # Loop parameter removed in python 3.10, was generally deprecated. So we're not going to allow it here despite the fact the underlying type does. 
+        self._generic_value: Optional[T] = None #_value might shadow the underlying variable of the same name and we don't want that. Probably fine but best not to risk it.
+
+    async def wait(self) -> T:
+        await super().wait()
+        return self._generic_value
+
+    def set(self, value: T) -> None:
+        self._generic_value = value
+        super().set()
+
+    def clear(self) -> None:
+        super().clear()
+        self._generic_value = None
+
+    def is_set(self) -> bool:
+        return super().is_set()
