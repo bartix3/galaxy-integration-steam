@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from asyncio import Future, get_running_loop
+from asyncio import Future, Task, get_running_loop
 from datetime import datetime, timedelta, timezone
 
 from typing import Awaitable, Callable, Dict, Generic, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar, Union, cast
@@ -41,19 +41,22 @@ class MultiHandler(NamedTuple):
 
     As of this writing, there is one exception that makes knowing if we are part of a multi worthwhile: Client Log On
     Here, several messages are sent at once, and it's possible for these to be split up. ensuring we have a means to wait \
-until all mesages are processed in that mult is therefore worthwhile. 
+until all mesages are processed in that multi is therefore worthwhile. 
 
-    MultiHandlers are created when a multi is first unpacked, passed to each member of that multi for event subscription, \
-and the event is set after the last packet is finished processing.
-
+    WARNING: awaiting on_multi_complete_event.wait() directly from the protobuf parser run loop (or any calls in its stack) will immediately deadlock the protobuf parser loop.
+    It is not beneficial to try to prevent this mistake, as having async calls for things like run_in_executor, sleep, etc is extremely useful.
+    Therefore, the onus is on you, as a (potential) developer, to keep this in mind. The solution to address this is to always create a task and call it from there. 
+    There is a list provided in this handler that will gather any and all task created and properly referenced here. Should a task not complete with the header, you will need to store the task separately.
     """
     multi_header: CMsgProtoBufHeader
     on_multi_complete_event : GenericEvent[CMsgProtoBufHeader]
+    post_multi_complete_gather_task_list : List[Task]
 
     @staticmethod
     def generate(header: CMsgProtoBufHeader) -> MultiHandler:
         ev : GenericEvent[CMsgProtoBufHeader] = GenericEvent()
-        return MultiHandler(header, ev)
+        gather_list : List[Task] = []
+        return MultiHandler(header, ev, gather_list)
   
 
 class AwaitableResponse(ABC):

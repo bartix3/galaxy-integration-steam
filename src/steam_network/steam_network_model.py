@@ -279,6 +279,7 @@ class SteamNetworkModel:
         data = result.body
 
         if eresult == EResult.OK and data.client_supplied_steamid != 0:
+            self._msg_handler.on_TokenLogOn_success(data.client_instance_id, data.heartbeat_seconds) # start the heartbeat task so we don't get kicked out.
             return ModelAuthClientLoginResult(data.client_supplied_steamid)
         elif eresult == EResult.AccessDenied:
             return None
