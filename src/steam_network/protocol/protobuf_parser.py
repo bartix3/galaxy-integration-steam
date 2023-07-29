@@ -13,12 +13,12 @@ from typing import Dict, Optional, List, Set, Tuple, cast
 from websockets.typing import Data
 
 from ..local_persistent_cache import LocalPersistentCache
-from .message_helpers import FutureInfo, MultiHandler
+from .message_helpers import AwaitableResponse, MultiHandler
 from .messages.steammessages_base import CMsgMulti, CMsgProtoBufHeader
 from .messages.steammessages_clientserver import CMsgClientLicenseList
 
 from .steam_client_enumerations import EMsg, EResult
-from ..utils import translate_error
+from ..utils import GenericEvent, translate_error
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -31,21 +31,17 @@ class ProtobufProcessor():
         Processing may require knowing if a given message is one of many (aka part of a Multi). we keep a record of these in a stack, represented as a list. 
         This data can be passed to processors who require this additional information.
     """
-    def __init__(self, queue: asyncio.Queue, future_lookup :Dict[int, FutureInfo], local_cache: LocalPersistentCache):
+    def __init__(self, queue: asyncio.Queue, future_lookup :Dict[int, AwaitableResponse], local_cache: LocalPersistentCache):
         self._queue = queue
         self._future_lookup = future_lookup
         self._local_cache = local_cache
-        #we're going to use this as a LIFO Queue, but with full access to it. Python does not natively because peek is not thread safe, 
-        #but neither is len, or the implicit Truthy coercion that comes from len. so that's stupid imo. Calls to local cache get a copy so
-        #they can't accidentally break us.
-        self._multi_stack : List[MultiHandler] = []
         self._has_more_messages: bool = True
 
     async def run(self):
         while self._has_more_messages or not self._queue.empty():
             try:
                 data : Data = cast(Data, await asyncio.wait_for(self._queue.get(), self._RECEIVE_DATA_TIMEOUT_SECONDS))
-                self._process_packet(data)
+                self._process_packet(data, None)
             except TimeoutError:
                 pass
 
@@ -53,7 +49,7 @@ class ProtobufProcessor():
     def notify_no_more_messages(self):
         self._has_more_messages = False
 
-    async def _process_packet(self, packet: Data):
+    async def _process_packet(self, packet: Data, containing_multi: Optional[MultiHandler]):
         if (isinstance(packet, str)):
             logger.warning("Packet returned a Text Frame string. This is unexpected and will likely break everything. Converting to bytes anyway.")
             packet = bytes(packet, "utf-8")
@@ -80,33 +76,43 @@ class ProtobufProcessor():
                 if self._session_id != header.client_sessionid:
                     logger.warning('Received session_id %s while client one is %s', header.client_sessionid, self._session_id)
 
-            await self._process_message(emsg, header, packet[8 + header_len:])
+            await self._process_message(emsg, header, packet[8 + header_len:], containing_multi)
         else:
             logger.warning("Packet for %d -> EMsg.%s with extended header - ignoring", emsg, EMsg(emsg).name)
 
-    async def _process_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes):
+    async def _process_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes, containing_multi: Optional[MultiHandler]):
         logger.info("[In] %d -> EMsg.%s", emsg.value, emsg.name)
         if emsg == EMsg.Multi:
             await self._process_multi(header, body)
         else:
             emsg = EMsg.ServiceMethodResponse if emsg == EMsg.ServiceMethod else emsg #make sure it't not borked if it's a solicited service message.
-            header_jobid : int = int(header.jobid_source)
-            
-            if (header_jobid in self._future_lookup ):
-                future_info = self._future_lookup[header_jobid]
-                is_expected, log_msg = future_info.is_expected_response_with_message(emsg, header.target_job_name)
+            lookup: int = int(header.jobid_source)
+            # Note: betterproto 1.2.5 does not set user-defined default values, so the default of ulong.MaxValue is not set. Should we swap to newer betterproto that supports user-defined defaults, this needs 
+            if lookup == 0: 
+                if not header.target_job_name:
+                    lookup = -1 * emsg.value
+                else:
+                    #could try resolving by looping through future list and seeing if any job names match.
+                    logger.warning("Message received with default job id but is a service message. Will likely cause issues. ")
+
+
+            if (lookup in self._future_lookup ):
+                future_info = self._future_lookup[lookup]
+                is_expected, log_msg = future_info.matches_identifier_with_log_message(emsg, header.target_job_name)
                 if not is_expected:
                     logger.warning(log_msg)
                 elif future_info.future.cancelled():
                     logger.warning("Attempted to set future to the processed message, but it was already cancelled. Removing it from the list")
-                    self._future_lookup.pop(header_jobid)
+                    self._future_lookup.pop(lookup)
+                    return
                 else:
-                    future_info.future.set_result((header, body))
+                    if future_info.generate_response_check_complete(header, body):
+                        self._future_lookup.pop(lookup)
                     return
             else:
                 logger.info(f"Received Unsolicited message {emsg.name}" + (f"({header.target_job_name})" if emsg == EMsg.ServiceMethodResponse else ""))
 
-        await self._handle_unsolicited_message(emsg, header, body)
+            await self._handle_unsolicited_message(emsg, header, body, containing_multi)
 
     async def _process_multi(self, header: CMsgProtoBufHeader, body: bytes):
         #multis are annoying. To properly handle them, we're sending off a "start" and "end" message to the caching process run loop 
@@ -125,21 +131,18 @@ class ProtobufProcessor():
         size_bytes = 4
         packets_parsed = 0
         
+        info_about_me: MultiHandler = MultiHandler.generate(header)
+
         while offset + size_bytes <= data_size:
-            if (packets_parsed == 0):
-                self._multi_stack.append(MultiHandler(header, set()))
             size = int.from_bytes(data[offset:offset + size_bytes], "little")
-            await self._process_packet(data[offset + size_bytes:offset + size_bytes + size])
+            await self._process_packet(data[offset + size_bytes:offset + size_bytes + size], info_about_me)
             offset += size_bytes + size
             packets_parsed += 1
 
         logger.debug("Finished processing message Multi. %d packets parsed", packets_parsed)
-        if (packets_parsed > 0):
-            data = self._multi_stack.pop()
-            for callback in data.on_multi_end_callbacks:
-                await callback(header)
+        info_about_me.on_multi_complete_event.set(header)
 
-    async def _handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes):
+    async def _handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
         if emsg == EMsg.ClientLoggedOff:
                 await self._process_client_logged_off(EResult(header.eresult))
         elif emsg == EMsg.ClientLicenseList:

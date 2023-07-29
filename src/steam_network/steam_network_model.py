@@ -22,7 +22,7 @@ from .mvc_classes import (AuthErrorCode, ModelAuthClientLoginResult,
                           ModelAuthCredentialData, ModelAuthError,
                           ModelAuthPollError, ModelAuthPollResult,
                           SteamPublicKey)
-from .protocol.message_helpers import (FutureInfo, MessageLostException,
+from .protocol.message_helpers import (AwaitableResponse, MessageLostException,
                                        ProtoResult)
 from .protocol.messages.service_cloudconfigstore import \
     CCloudConfigStore_Download_Response
@@ -84,7 +84,7 @@ class SteamNetworkModel:
         process_task: Optional[Task[None]] = None
         receive_task: Optional[Task[None]] = None
         receive_process_queue: asyncio.Queue = asyncio.Queue()
-        future_lookup_dict: Dict[int, FutureInfo] = {}
+        future_lookup_dict: Dict[int, AwaitableResponse] = {}
 
         while True:
             if self._msg_handler is None:

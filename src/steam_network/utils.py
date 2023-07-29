@@ -135,6 +135,11 @@ def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
 
 T = TypeVar("T") 
 class GenericEvent(Event, Generic[T]):  # noqa: 302
+    """ A generic variant of a standard asyncio event that allows you to pass data to the source waiting on the event. 
+
+    A hybrid of a future and an event that allows you to get data like a future but have multiple subscribers like an event.
+    Not as powerful as a true high-level, callback-driven event, but fundementally simpler. 
+    """
     def __init__(self):
         super().__init__() # Loop parameter removed in python 3.10, was generally deprecated. So we're not going to allow it here despite the fact the underlying type does. 
         self._generic_value: Optional[T] = None #_value might shadow the underlying variable of the same name and we don't want that. Probably fine but best not to risk it.

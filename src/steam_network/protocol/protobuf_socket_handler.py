@@ -10,20 +10,23 @@ Note that all unsoliticed messages are not implemented because there is no cache
 When parsing the login token call, if it is successful, you must call on_login_successful here so the heartbeat starts.
 """
 
-import asyncio
+#built-in modules:
+#classic imports
 import ipaddress
 import logging
 import socket as sock
 import struct
-from asyncio import Future, Task
+#modern imports
+from asyncio import Future, Queue, Task, create_task, sleep
 from base64 import b64encode
+from datetime import datetime, timedelta, timezone
 from itertools import count
-from typing import Callable, Dict, Iterator, List, Optional, Tuple
-
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, TypeVar
+#package modules:
 from betterproto import Message
 from websockets.client import WebSocketClientProtocol
-
-from .message_helpers import FutureInfo, MessageLostException, ProtoResult
+#local modules
+from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleResponse, AwaitableEMessageResponse, AwaitableJobNameResponse, MessageLostException, ProtoResult
 from .messages.service_cloudconfigstore import (
     CCloudConfigStore_Download_Request, CCloudConfigStore_Download_Response,
     CCloudConfigStore_NamespaceVersion)
@@ -84,7 +87,7 @@ CHECK_AUTHENTICATION_STATUS = "Authentication.PollAuthSessionStatus#1"
 class ProtobufSocketHandler:
     """ Wraps a websocket with all the information we need to successfully send and receive messages to Steam's servers.
 
-    Since this class is designed to be
+     Since this class is designed to be as simple as possible, it will simply hand-off any unexpected messages, only parsing what it can.
     """
     _PROTO_MASK = 0x80000000
     _ACCOUNT_ID_MASK = 0x0110000100000000
@@ -92,17 +95,61 @@ class ProtobufSocketHandler:
     _MSG_PROTOCOL_VERSION = 65580
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
-    def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue: asyncio.Queue, future_lookup: Dict[int, FutureInfo]):
-        self._future_lookup: Dict[int, FutureInfo] = future_lookup
+    _DATETIME_JAN_1_2005 = datetime(2005, 1, 1, tzinfo=timezone.utc)
+    
+    _BOX_ID_MASK = 0x3FF
+    _PROCESS_ID_MASK = 0xf
+    _DATETIME_MASK = 0x3FFFFFFF
+    _ITERATOR_MAX = 0x100000
+
+    _PROCESS_ID_WIDTH = 4
+    _DATETIME_WIDTH = 30
+    _ITERATOR_WIDTH = 20
+
+
+    def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue: Queue, future_lookup: Dict[int, AwaitableResponse], box_id: int = 0, process_id: int = 0):
+        self._future_lookup: Dict[int, AwaitableResponse] = future_lookup
         self._socket_uri = socket_uri
         self._socket: WebSocketClientProtocol = socket
-        self._queue: asyncio.Queue = queue
+        self._queue: Queue = queue
         # this is actually clever. A lazy iterator that increments every time you call next.
         self._job_id_iterator: Iterator[int] = count(1)
         # guaranteed to not be null unless the
         self._session_id: Optional[int] = None
         self.confirmed_steam_id: Optional[int] = None
         self._heartbeat_task: Optional[Task[None]] = None
+        self._job_id_high_bits: int = ProtobufSocketHandler.generate_job_id_high_bits(box_id, process_id)
+        
+
+    @classmethod
+    def generate_job_id_high_bits(cls, box_id: int, process_id: int):
+        value: int = 0
+        #when we shift, we do so in preparation of the next block, so our shift width is that of the next part of the job id. 
+        #handle box id.
+        if box_id != 0:
+            box_id &= cls._BOX_ID_MASK # cap at 10 bits
+            value = box_id << cls._PROCESS_ID_WIDTH
+        #handle process id
+        if process_id != 0:
+            process_id &= cls._PROCESS_ID_MASK # cap at 4 bits.
+            value = (value + process_id) << cls._DATETIME_WIDTH 
+        #handle date time
+        utc_now = datetime.now(timezone.utc)
+        delta_time = int((utc_now - cls._DATETIME_JAN_1_2005).total_seconds()) # Total seconds since jan 1 2005 as an integer. Used by job id, but idk why that is the arbitrary date we use.
+        # Limit to 30 bits because we have a fixed 64-bit integer for job id and that's how many characters are allotted. wont be relevant until ~2060 +/- 5 years (didn't do the math)
+        relative_start_time : int = delta_time & cls._DATETIME_MASK 
+
+        value = (value + relative_start_time) << cls._ITERATOR_WIDTH # relative start time is already capped. the value is constant so we can afford to make it compile-time safe.
+
+    def _get_job_id(self) -> int:
+        value = self._job_id_high_bits
+        iteration = next(self._job_id_iterator)
+        if iteration == self._ITERATOR_MAX:
+            self._job_id_iterator = count(1)
+            iteration = 0
+        value += iteration
+
+        return value
 
     @property
     def socket_uri(self):
@@ -122,17 +169,19 @@ class ProtobufSocketHandler:
 
     async def SendHello(self):
         message = CMsgClientHello(self._MSG_PROTOCOL_VERSION)
+        logger.info("Sending hello")
         await self._send_no_wait(message, EMsg.ClientHello)
 
     # Standard Request/Response style messages. They aren't synchronous by nature of websocket communication, but we can write our code to closely mimic that behavior.
 
     # get the rsa public key for the provided user
     async def GetPasswordRSAPublicKey(self, username: str) -> ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response]:
+        logger.info("Sending rsa key request for user")
         msg = CAuthentication_GetPasswordRSAPublicKey_Request(username)
         try:
-            header, resp_bytes = await self._send_recv_service_message(msg, GET_RSA_KEY, next(self._job_id_iterator))
-
-            return ProtoResult(header.eresult, header.error_message, CAuthentication_GetPasswordRSAPublicKey_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
+            logger.info("obtained rsa key for user")
+            return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
 
@@ -162,19 +211,20 @@ class ProtobufSocketHandler:
 
         logger.info("Sending log on message using credentials in new authorization workflow")
         try:
-            header, resp_bytes = await self._send_recv_service_message(message, LOGIN_CREDENTIALS, next(self._job_id_iterator))
+            header, resp = await self._send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
             logger.info("Received log on credentials response")
-            return ProtoResult(header.eresult, header.error_message, CAuthentication_BeginAuthSessionViaCredentials_Response().parse(resp_bytes))
+            return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
 
     # update login with steam guard code
     async def UpdateAuthSessionWithSteamGuardCode(self, client_id: int, steam_id: int, code: str, code_type: EAuthSessionGuardType) -> ProtoResult[CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response]:
+        logger.info("Sending steam guard update data request")
         msg = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request(client_id, steam_id, code, code_type)
         try:
-            header, resp_bytes = await self._send_recv_service_message(msg, UPDATE_TWO_FACTOR, next(self._job_id_iterator))
-
-            return ProtoResult(header.eresult, header.error_message, CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(msg, CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response, UPDATE_TWO_FACTOR)
+            logger.info("Received steam guard update response.")
+            return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
 
@@ -183,10 +233,12 @@ class ProtobufSocketHandler:
         message = CAuthentication_PollAuthSessionStatus_Request()
         message.client_id = client_id
         message.request_id = request_id
+        logger.info("Requesting update on steam guard status")
         try:
             # we leave the token revoke unset, i'm not sure how the ctor works here so i'm just doing it this way.
-            header, resp_bytes = await self._send_recv_service_message(message, CHECK_AUTHENTICATION_STATUS, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CAuthentication_PollAuthSessionStatus_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(message, CAuthentication_PollAuthSessionStatus_Response, CHECK_AUTHENTICATION_STATUS)
+            logger.info("Received update on steam guard status response")
+            return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
 
@@ -214,33 +266,34 @@ class ProtobufSocketHandler:
         logger.info("Sending log on message using access token")
 
         try:
-            header, resp_bytes = await self._send_recv(message, EMsg.ClientLogon, EMsg.ClientLogOnResponse, next(self._job_id_iterator), override_steam_id=override_steam_id)
-            return ProtoResult(header.eresult, header.error_message, CMsgClientLogonResponse().parse(resp_bytes))
+            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogon, EMsg.ClientLogOnResponse, CMsgClientLogonResponse, override_steam_id)
+            logger.info("Received log on message for access token response")
+            return ProtoResult(header.eresult, header.error_message, resp)
 
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
 
     def on_TokenLogOn_success(self, confirmed_steam_id: int, heartbeat_interval: float):
         self.confirmed_steam_id = confirmed_steam_id
-        self._heartbeat_task = asyncio.create_task(self._heartbeat(heartbeat_interval))
+        self._heartbeat_task = create_task(self._heartbeat(heartbeat_interval))
 
     async def _heartbeat(self, interval: float):
         # these messages will be sent over and over, no need to recreate the data each time. So we're building a bytes object and sending that each time.
         message = CMsgClientHeartBeat(False)
-        header = self._generate_header(None)  # leave the job id unset so we don't rapidly increase our counter.
+        header = self._generate_header()  # blank header is ideal as we don't increase our iterator needlessly.
         data = self._generate_message(header, message, EMsg.ClientHeartBeat)
 
         while True:
             await self._socket.send(data)
-            await asyncio.sleep(interval)
+            await sleep(interval)
 
     # log off and read the response. We don't actually care about the response so this is not used atm.
     async def LogOff(self) -> ProtoResult[CMsgClientLoggedOff]:
         message = CMsgClientLogOff()
         logger.info("Sending log off message")
         try:
-            header, resp_bytes = await self._send_recv(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CMsgClientLoggedOff().parse(resp_bytes))
+            header, resp = await self._send_recv(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
+            return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
         except Exception as e:
@@ -265,44 +318,66 @@ class ProtobufSocketHandler:
     # USED BY ACHIEVEMENT IMPORT
     async def GetUserStats(self, game_id: int) -> ProtoResult[CMsgClientGetUserStatsResponse]:
         message = CMsgClientGetUserStats(game_id=game_id)
+        logger.info("Retrieving user stats for game %d", game_id)
         try:
-            header, response = await self._send_recv(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CMsgClientGetUserStatsResponse().parse(response))
+            header, response = await self._send_recv_client_message(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, CMsgClientGetUserStatsResponse)
+            logger.info("Retrieved user stats for game %d", game_id)
+            return ProtoResult(header.eresult, header.error_message, response)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
+    @staticmethod
+    def _PICS_done(product_info : CMsgClientPICSProductInfoResponse) -> bool:
+        return not product_info.response_pending
+
     # get user license information
-    async def PICSProductInfo_from_licenses(self, steam_licenses: List[CMsgClientLicenseListLicense]) -> ProtoResult[CMsgClientPICSProductInfoResponse]:
+    async def PICSProductInfo_from_licenses(self, steam_licenses: List[CMsgClientLicenseListLicense]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
         logger.info("Sending call %s with %d package_ids", EMsg.ClientPICSProductInfoRequest.name, len(steam_licenses))
         message = CMsgClientPICSProductInfoRequest()
 
         message.packages = [CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token) for x in steam_licenses]
 
-        try:
-            header, resp_bytes = await self._send_recv(message, EMsg.ClientPICSProductInfoRequest, EMsg.ClientPICSProductInfoResponse, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CMsgClientPICSProductInfoResponse().parse(resp_bytes))
-        except Exception as e:
-            logger.error(f"Unable to send logoff message {repr(e)}")
+        job_id = self._get_job_id()
+        send_header = self._generate_header(job_id)
+        send_emsg = EMsg.ClientPICSProductInfoRequest
+        resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
+        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
 
-    async def PICSProductInfo_from_apps(self, app_ids: List[int]) -> ProtoResult[CMsgClientPICSProductInfoResponse]:
+        try:
+            data = await resp_holder.get_future()
+            return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
+        except Exception as e:
+            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
+            self._future_lookup.pop(job_id)
+            raise
+
+    async def PICSProductInfo_from_apps(self, app_ids: List[int]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
         logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
         message = CMsgClientPICSProductInfoRequest()
 
         message.apps = [CMsgClientPICSProductInfoRequestAppInfo(x) for x in app_ids]
+        
+        job_id = self._get_job_id()
+        send_header = self._generate_header(job_id)
+        send_emsg = EMsg.ClientPICSProductInfoRequest
+        resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
+        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
 
         try:
-            header, resp_bytes = await self._send_recv(message, EMsg.ClientPICSProductInfoRequest, EMsg.ClientPICSProductInfoResponse, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CMsgClientPICSProductInfoResponse().parse(resp_bytes))
+            data = await resp_holder.get_future()
+            return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
         except Exception as e:
-            logger.error(f"Unable to send logoff message {repr(e)}")
+            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
+            self._future_lookup.pop(job_id)
+            raise
 
     async def GetAppRichPresenceLocalization(self, app_id: int, language: str = "english") -> ProtoResult[CCommunity_GetAppRichPresenceLocalization_Response]:
         logger.info(f"Sending call for rich presence localization with {app_id}, {language}")
         message = CCommunity_GetAppRichPresenceLocalization_Request(app_id, language)
 
         try:
-            header, resp_bytes = await self._send_recv_service_message(message, GET_APP_RICH_PRESENCE, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CCommunity_GetAppRichPresenceLocalization_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(message, CCommunity_GetAppRichPresenceLocalization_Response, GET_APP_RICH_PRESENCE)
+            return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
@@ -314,8 +389,8 @@ class ProtobufSocketHandler:
         message.versions.append(message_inside)
 
         try:
-            header, resp_bytes = await self._send_recv_service_message(message, CLOUD_CONFIG_DOWNLOAD, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CCloudConfigStore_Download_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(message, CCloudConfigStore_Download_Response, CLOUD_CONFIG_DOWNLOAD)
+            return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
@@ -324,8 +399,8 @@ class ProtobufSocketHandler:
         message = CPlayer_GetLastPlayedTimes_Request(0)
 
         try:
-            header, resp_bytes = await self._send_recv_service_message(message, GET_LAST_PLAYED_TIMES, next(self._job_id_iterator))
-            return ProtoResult(header.eresult, header.error_message, CPlayer_GetLastPlayedTimes_Response().parse(resp_bytes))
+            header, resp = await self._send_recv_service_message(message, CPlayer_GetLastPlayedTimes_Response, GET_LAST_PLAYED_TIMES)
+            return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
@@ -334,12 +409,9 @@ class ProtobufSocketHandler:
             await self.LogOff_no_wait()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-        # TODO: not sure if i should do this. It'll work but i'll need to wrap every call in a try catch.
-        for fi in self._future_lookup.values():
-            fi.future.cancel()
 
     # header and message generates are always called back to back. feel free to merge thes into one.
-    def _generate_header(self, job_id: Optional[int], target_job_id: Optional[int] = None, job_name: Optional[str] = None, override_steam_id: Optional[int] = None) -> CMsgProtoBufHeader:
+    def _generate_header(self, job_id: Optional[int] = None, job_name: Optional[str] = None, override_steam_id: Optional[int] = None) -> CMsgProtoBufHeader:
         """Generate the protobuf header that the send functions require.
 
         """
@@ -356,8 +428,6 @@ class ProtobufSocketHandler:
             proto_header.steamid = 0 + self._ACCOUNT_ID_MASK
         if self._session_id is not None:
             proto_header.client_sessionid = self._session_id
-        if target_job_id is not None:
-            proto_header.jobid_target = target_job_id
         if job_name is not None:
             proto_header.target_job_name = job_name
 
@@ -372,12 +442,12 @@ class ProtobufSocketHandler:
         msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
         return msg_info + head + body
 
-    async def _send_no_wait(self, msg: Message, emsg: EMsg, job_id: int, target_job_id: Optional[int] = None, job_name: Optional[str] = None):
+    async def _send_no_wait(self, msg: Message, emsg: EMsg, job_id: int, job_name: Optional[str] = None):
         """Send a message along the websocket. Do not expect a response.
 
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
         """
-        header = self._generate_header(job_id, target_job_id, job_name)
+        header = self._generate_header(job_id, job_name)
         data = self._generate_message(header, msg, emsg)
 
         if LOG_SENSITIVE_DATA:
@@ -386,60 +456,56 @@ class ProtobufSocketHandler:
             logger.info("[Out] %s (%dB)", repr(emsg), len(data))
         await self._socket.send(data)
 
-    async def _send_recv_common(self, msg: Message, job_id: int, callback: Callable[[Future], FutureInfo],
-                                target_job_id: Optional[int], job_name: Optional[str], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, bytes]:
+
+
+    async def _send_common(self, header: CMsgProtoBufHeader, msg: Message, request_emsg: EMsg, response_holder: AwaitableResponse, unique_identifier: int, override_steam_id: Optional[int] = None):
         """Perform the common send and receive logic.
         """
-        future: Future = None
-        info: FutureInfo = None
         try:
-            loop = asyncio.get_running_loop()
-            future = loop.create_future()
-            info: FutureInfo = callback(future)
-            self._future_lookup[job_id] = info
-            emsg = info.sent_type
-            header = self._generate_header(job_id, target_job_id, job_name, override_steam_id)
-            data = self._generate_message(header, msg, emsg)
+            self._future_lookup[unique_identifier] = response_holder
+            
+            data = self._generate_message(header, msg, request_emsg)
 
             if LOG_SENSITIVE_DATA:
-                logger.info("[Out] %s (%dB), params:%s\n", repr(emsg), len(data), repr(msg))
+                logger.info("[Out] %s (%dB), params:%s\n", repr(request_emsg), len(data), repr(msg))
             else:
-                logger.info("[Out] %s (%dB)", repr(emsg), len(data))
+                logger.info("[Out] %s (%dB)", repr(request_emsg), len(data))
             await self._socket.send(data)
         except Exception as e:
             logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
-            if info is not None:
-                future.cancel()
-                self._future_lookup.pop(job_id)
+            response_holder.get_future.cancel()
+            self._future_lookup.pop(unique_identifier)
             raise
 
+    U = TypeVar("U", bound= Message)
+    async def _send_recv_service_message(self, msg: Message, response_type: Type[U], send_recv_name: str) -> Tuple[CMsgProtoBufHeader, U]:
+        emsg = EMsg.ServiceMethodCallFromClientNonAuthed if self.confirmed_steam_id is None else EMsg.ServiceMethodCallFromClient
+        job_id = self._get_job_id()
+        header = self._generate_header(job_id, send_recv_name)
+        resp_holder = AwaitableJobNameResponse.create_default(response_type, send_recv_name)
+
+        await self._send_common(header, msg, emsg, resp_holder, job_id)
         try:
-            header: CMsgProtoBufHeader
-            data: bytes
-            header, data = await self._future_lookup[job_id].future
-            self._future_lookup.pop(job_id)
-            return (header, data)
+            return await resp_holder.get_future()
         except Exception as e:
             logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
-            if info is not None:
-                future.cancel()
-                self._future_lookup.pop(job_id)
+            self._future_lookup.pop(job_id)
             raise
 
-    async def _send_recv_service_message(self, msg: Message, send_recv_name: str, job_id: int, target_job_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, bytes]:
-        emsg = EMsg.ServiceMethodCallFromClientNonAuthed if self.confirmed_steam_id is None else EMsg.ServiceMethodCallFromClient
+    V = TypeVar("V", bound= Message)
+    async def _send_recv_client_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
 
-        def um_generate_future(future: Future):
-            return FutureInfo(future, emsg, EMsg.ServiceMethodResponse, send_recv_name)
+        header = self._generate_header(override_steam_id=override_steam_id)
+        unique_identifier = expected_return_format.value * -1
+        resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
+        await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
 
-        return await self._send_recv_common(msg, job_id, um_generate_future, target_job_id, send_recv_name)
-
-    async def _send_recv(self, msg: Message, send_type: EMsg, expected_return_type: EMsg, job_id: int, target_job_id: Optional[int] = None,
-                         job_name: Optional[str] = None, override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, bytes]:
-        def normal_generate_future(future: Future) -> FutureInfo:
-            return FutureInfo(future, send_type, expected_return_type)
-
-        return await self._send_recv_common(msg, job_id, normal_generate_future, target_job_id, job_name, override_steam_id)
+        try:
+            return await resp_holder.get_future()
+        except Exception as e:
+            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
+            self._future_lookup.pop(unique_identifier)
+            raise
 
     # old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow.
     async def _get_obfuscated_private_ip(self) -> int:
