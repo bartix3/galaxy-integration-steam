@@ -52,7 +52,7 @@ class ProtobufProcessor():
                 await self._process_packet(data, None)
             except TimeoutError:
                 pass
-            
+
             await asyncio.sleep(0.01)  # allow other tasks to run.
         
         # Only reach this point when shutting down this instance. allow any background tasks to complete. 
@@ -149,7 +149,7 @@ class ProtobufProcessor():
         offset = 0
         size_bytes = 4
         packets_parsed = 0
-        
+
         info_about_me: MultiHandler = MultiHandler.generate(header)
 
         while offset + size_bytes <= data_size:
@@ -167,9 +167,9 @@ class ProtobufProcessor():
 
     async def _handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
         if emsg == EMsg.ClientLoggedOff:
-            self._process_client_logged_off(EResult(header.eresult))
+                self._process_client_logged_off(EResult(header.eresult))
         elif emsg == EMsg.ClientLicenseList:
-            self._process_license_list(header, body)
+            await self._process_license_list(header, body)
         else:
             logger.warning("Received an unsolicited message")
             logger.warning("Ignored message %d", emsg)
@@ -179,7 +179,39 @@ class ProtobufProcessor():
         #raise an error. Our parent task (the run loop in model) will catch this, shut down the socket, reconnected to steam's servers, and restart these tasks if it is able to do so.
         raise translate_error(result)
 
-    def _process_license_list(self, header : CMsgProtoBufHeader, body: bytes, containing_multi: Optional[MultiHandler]):
+    async def _licenses_processed_task(self, client_login_multi: Optional[MultiHandler]):
+        if client_login_multi is not None:
+            _ = client_login_multi.on_multi_end_event.wait()
+        self._games_cache.compare_packages(self._package_processing_lookup)
+        self._processing_licenses = False
+
+    async def _process_license_list(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
+        if self._has_steam_id():
+            self._process_license_list_task(header, body, parent_multi)
+        else:
+            asyncio.create_task(self._process_license_list_task(header, body, parent_multi))
+
+    async def _process_license_list_task(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
+
+        steam_id = await self._get_steam_id()
+        owner_id = int(steam_id - self._ACCOUNT_ID_MASK)
+
+        complete_processing_immediately: bool = parent_multi is None # normal behavior is to be event-based. This handles an edge case where the parent multi is null.
+
+        #if already processing licenses, then this task already exists, so don't do it again. 
+        if not complete_processing_immediately and not self._processing_licenses:
+            #create the task and set our flag so we don't duplicate task creation
+            asyncio.create_task(self._licenses_processed_task(parent_multi))
+        
+        self._processing_licenses = True
+
         data = CMsgClientLicenseList().parse(body)
 
+        for license_data in data.licenses:
+            owns_game = owner_id == license_data.owner_id
+
+
+
+        if complete_processing_immediately:
+            await self._licenses_processed_task(None)
 

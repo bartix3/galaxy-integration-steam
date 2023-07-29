@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from .caches.cache_base import CacheBase
 from .caches.friends_cache import FriendsCache

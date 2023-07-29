@@ -142,7 +142,7 @@ class GenericEvent(Event, Generic[T]):  # noqa: 302
     """
     def __init__(self):
         super().__init__() # Loop parameter removed in python 3.10, was generally deprecated. So we're not going to allow it here despite the fact the underlying type does. 
-        self._generic_value: Optional[T] = None #_value might shadow the underlying variable of the same name and we don't want that. Probably fine but best not to risk it.
+        self._generic_value: Optional[T] = None # _value might shadow the underlying variable of the same name and we don't want that. Probably fine but best not to risk it.
 
     async def wait(self) -> T:
         await super().wait()
