@@ -43,6 +43,20 @@ class ProtobufProcessor():
         self._task_list: List[asyncio.Task]
         self.gathering_tasks_event: asyncio.Event = asyncio.Event()
         self._has_more_messages: bool = True
+        #client log in
+        #steam id
+        self._steam_id_ready_event: asyncio.Event
+        self._confirmed_steam_id : Optional[int] = None
+        #license list
+        self._processing_licenses : bool = False
+        self._package_is_owned_lookup : Dict[int, bool] = {}
+        #friend list
+        self._processing_friend_ids: bool = False
+        self._friend_id_list: List[int] = []
+
+
+    def has_steam_id(self) -> bool:
+        return self._steam_id_ready_event.is_set()
 
     async def run(self):
         #as long as can get more messages or we still have messages to process, keep going.
@@ -179,39 +193,72 @@ class ProtobufProcessor():
         #raise an error. Our parent task (the run loop in model) will catch this, shut down the socket, reconnected to steam's servers, and restart these tasks if it is able to do so.
         raise translate_error(result)
 
-    async def _licenses_processed_task(self, client_login_multi: Optional[MultiHandler]):
-        if client_login_multi is not None:
-            _ = client_login_multi.on_multi_end_event.wait()
-        self._games_cache.compare_packages(self._package_processing_lookup)
-        self._processing_licenses = False
+    #region License List
+    async def _process_license_list_message(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
+        """ process the license list message. note that we need the confirmed steam id to properly process this message so we need to wait until it's confirmed.
 
-    async def _process_license_list(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
-        if self._has_steam_id():
-            self._process_license_list_task(header, body, parent_multi)
-        else:
-            asyncio.create_task(self._process_license_list_task(header, body, parent_multi))
-
-    async def _process_license_list_task(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
-
-        steam_id = await self._get_steam_id()
-        owner_id = int(steam_id - self._ACCOUNT_ID_MASK)
-
-        complete_processing_immediately: bool = parent_multi is None # normal behavior is to be event-based. This handles an edge case where the parent multi is null.
-
-        #if already processing licenses, then this task already exists, so don't do it again. 
-        if not complete_processing_immediately and not self._processing_licenses:
-            #create the task and set our flag so we don't duplicate task creation
-            asyncio.create_task(self._licenses_processed_task(parent_multi))
-        
-        self._processing_licenses = True
-
+        If it is not yet confirmed, create a task and defer execution until that id is confirmed. if it is, then just call the coroutine immediately. 
+        """
         data = CMsgClientLicenseList().parse(body)
 
+        #check if we have the steam id. if we do, we don't need to wrap it in a task, it won't deadlock. If we don't, make sure to create a task and add it to proper place for cleanup.
+        if self._has_steam_id():
+            await self._check_license_list_against_steam_id(header, data, parent_multi)
+        else:
+            task = asyncio.create_task(self._check_license_list_against_steam_id(header, data, parent_multi))
+            if (parent_multi is not None):
+                parent_multi.post_multi_complete_gather_task_list.append(task)
+            else:
+                self._task_list.append(task)
+    
+    async def _check_license_list_against_steam_id(self, header : CMsgProtoBufHeader, data: CMsgClientLicenseList, parent_multi: Optional[MultiHandler]):
+        """ Process a license list. Defer execution until the steam id is known, as we need it to determine if the package is owned or if it's a subscription.
+
+        This call will deadlock the run loop if called directly from it (or its calls like process_message), unless the steam_id is already known. 
+        Therefore, if the steam id is not known before calling this, it must be done in a separate task. 
+
+        There is anecdotal evidence that above 12k licenses, the response is split across multiple messages. It's assumed that these will all be part of the client login multi.
+        Therefore, we need to wait for the parent multi to complete before going to the cache. Therefore, this function starts a task to run at parent multi completion if one exists.
+        If no parent multi exists, it runs this task immediately instead. If this task is already started, does not spawn an additional task.
+        """
+        await self._steam_id_ready_event.wait()
+        steam_id = self._confirmed_steam_id
+        owner_id = int(steam_id - self._ACCOUNT_ID_MASK)
+
+        #Normally we attach this to the parent multi and wait for that to finish before checking the licenses. If no such multi exists, we have to do it all at once. 
+        #this flag helps catch that edge case. 
+        complete_processing_immediately: bool = parent_multi is None
+
+        #try to start the task that will update the cache that all licenses have been processed from the servers. Will not do so if there is no parent multi to attach to or if one already exists.
+        if not complete_processing_immediately and not self._processing_licenses:
+            task = asyncio.create_task(self._all_known_licenses_processed_update_cache(parent_multi))
+            parent_multi.post_multi_complete_gather_task_list.append(task)
+        
+        #set the flag so we know not to create additional task(s) for the license list.
+        self._processing_licenses = True
+
         for license_data in data.licenses:
-            owns_game = owner_id == license_data.owner_id
+            owns_package = owner_id == license_data.owner_id
+            package_id = license_data.package_id
+            #may have access to the package from multiple sources. If one form of access is ownership, it overrides all the others. If not, only add it if it's not already there.
+            if owns_package or package_id not in self._package_is_owned_lookup:
+                self._package_is_owned_lookup[package_id] = owns_package
 
-
-
+        # if we hit the edge case where we have no parent multi, complete the code immediately. 
         if complete_processing_immediately:
-            await self._licenses_processed_task(None)
+            await self._all_known_licenses_processed_update_cache(None)
+    
+    async def _all_known_licenses_processed_update_cache(self, client_login_multi: Optional[MultiHandler]):
+        if client_login_multi is not None:
+            _ = client_login_multi.on_multi_end_event.wait()
 
+        self._local_cache.compare_packages(self._package_is_owned_lookup)
+        self._processing_licenses = False
+        self._package_is_owned_lookup.clear()
+    #endregion License List
+    #region Friend Data
+    async def _process_friend_list_message(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
+        """ Process the friends list message. Like license list, this can apparently be a multi-parter. Unlike license list, we are guarenteed to know when a new list starts. 
+        """
+        pass
+    #endregion

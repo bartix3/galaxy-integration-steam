@@ -78,6 +78,7 @@
     <Compile Include="src\local\__init__.py" />
     <Compile Include="src\steam_network\caches\cache_base.py" />
     <Compile Include="src\steam_network\caches\games_cache.py" />
+    <Compile Include="src\steam_network\caches\package_cache.py" />
     <Compile Include="src\steam_network\local_persistent_cache.py" />
     <Compile Include="src\plugin.py" />
     <Compile Include="src\steam_network\caches\__init__.py" />

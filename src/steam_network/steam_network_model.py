@@ -286,6 +286,16 @@ class SteamNetworkModel:
         else:
             logger.warning(f"authenticate_token failed with code: {eresult.name}")
             return None
+    #endregion
+    #region Games
+    async def proactive_games_task(self):
+        """ Pre-emptively begin parsing game/subscription data. We're going to need to do it anyway, so do it ASAP.
+
+        Started by the login process after a successful login, but before returning the results to GOG.
+        """
+        pass
+
+
 
     async def get_owned_games(self) -> List[Game]:
         pass
@@ -368,7 +378,7 @@ class SteamNetworkModel:
 
     def game_times_import_complete(self):
         pass
-    #endregion
+    #endregion Play Time
 
     #region User-defined settings applied to their games
     async def begin_get_tags_hidden_etc(self) -> Dict[str, Set[int]]:

@@ -26,8 +26,6 @@ class LocalPersistentCache:
     Note: you can check the current multi a message is part of by peeking self._multi_stack.
     """
 
-    _ACCOUNT_ID_MASK = 0x0110000100000000
-
     VERSION = "2.0.0"
 
     def __init__(self, cache: Dict[str, Any]):
@@ -36,37 +34,12 @@ class LocalPersistentCache:
         self._confirmed_steam_id: Optional[int] = None
         self._persistent_cache: Dict[str, Any] = cache
 
-    async def _process_license_list(self, header: CMsgProtoBufHeader, message: CMsgClientLicenseList, multi_stack: List[MultiHandler]):
-        # license lists are sent as part of the client login response multi. It's possible steam may give us multiple of these if the user owns > 12k licenses,
-        # so we're forced to wait until that multi is processed. If we're lucky, the 12k+ licenses are themselves a nested multi but until we can confirm that it's better to be safe than sorry.
-        callback_driven: bool = len(multi_stack) > 0
-        if callback_driven:
-            head = multi_stack[0]
-            # since we use a set here i can just add it and duplicates won't be an issue.
-            # This would be more complicated if this function captured variables or didn't accept the provided prot header,
-            # but it's formatted spefically that way to not cause issues.
-            head.on_multi_end_callbacks.add(self._process_license_list_multi_finished)
-
-        self._games_cache.prepare_for_server_packages()
-        self._games_cache.add_server_packages(filter(lambda x: x.package_id != 0 and x.flags != 520, message.licenses))
-
-        if not callback_driven:
-            await self._process_license_list_multi_finished(None)
-
     def on_token_login_complete(self, confirmed_steam_id: int):
         self._confirmed_steam_id = confirmed_steam_id
 
-    async def _process_license_list_multi_finished(self, _: CMsgProtoBufHeader):
-        await self._games_cache.finished_obtaining_server_packages()
+    def compare_packages(self, package_id_owns_package_map: Dict[int, bool]):
+        self.games_cache.compare_package(package_id_owns_package_map)
 
-    def _get_owner_id(self) -> Optional[int]:
-        if self._confirmed_steam_id is None:
-            return None
-        else:
-            # this should not be a subtract op if it's a true mask, it should likely be a NAND. but idk.
-            return int(self._confirmed_steam_id - self._ACCOUNT_ID_MASK)
-            # here's the NAND
-            # return int(self._confirmed_steam_id & ~self._ACCOUNT_ID_MASK)
 
     async def close(self):
         raise NotImplementedError()

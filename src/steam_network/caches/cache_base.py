@@ -2,13 +2,12 @@ import asyncio
 import logging
 
 from abc import ABC, abstractmethod
-from typing import TypeVar, Dict, Optional, Any, List, Generic
+from typing import TypeVar, Dict, Optional, Any, List
 
 
 logger = logging.getLogger(__name__)
 
-U = TypeVar("U")
-class CacheBase(ABC, Generic[U]):
+class CacheBase(ABC):
     """Base class for all caches. The generic type is used to determine what information it will return. 
     """
     def __init__(self):
@@ -60,9 +59,13 @@ class CacheBase(ABC, Generic[U]):
         return False
 
     @abstractmethod
-    def is_ready_for_caching():
+    def is_ready_for_caching(self):
         pass
 
     @abstractmethod
-    def convert_to_cachable() -> Optional[U]:
+    def convert_to_cachable(self) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def populate_from_cache(self, cache_data: Dict[str, Any]):
         pass
