@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from .caches.cache_base import CacheBase
 from .caches.friends_cache import FriendsCache
 from .caches.games_cache import GameLicense, GamesCache
-from .caches.local_machine_cache import LocalMachineCache
+from .caches.packages_cache import PackageCache
 from .caches.stats_cache import StatsCache
 from .caches.times_cache import TimesCache
 from .caches.websocket_cache_persistence import WebSocketCachePersistence
@@ -33,12 +33,17 @@ class LocalPersistentCache:
         self._username: Optional[str] = None
         self._confirmed_steam_id: Optional[int] = None
         self._persistent_cache: Dict[str, Any] = cache
+        self.package_cache = PackageCache()
+        self.games_cache = GamesCache()
 
     def on_token_login_complete(self, confirmed_steam_id: int):
         self._confirmed_steam_id = confirmed_steam_id
 
+    def prepare_for_package_data(self):
+        self.package_cache.prepare_for_server_data()
+
     def compare_packages(self, package_id_owns_package_map: Dict[int, bool]):
-        self.games_cache.compare_package(package_id_owns_package_map)
+        self.package_cache.compare_packages(package_id_owns_package_map)
 
 
     async def close(self):

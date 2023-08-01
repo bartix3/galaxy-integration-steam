@@ -21,7 +21,7 @@ from asyncio import Future, Queue, Task, create_task, sleep
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from itertools import count
-from typing import Callable, Dict, Iterator, List, Optional, Tuple, Type, TypeVar
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Type, TypeVar
 #package modules:
 from betterproto import Message
 from websockets.client import WebSocketClientProtocol
@@ -68,6 +68,8 @@ from .messages.steammessages_webui_friends import (
     CCommunity_GetAppRichPresenceLocalization_Request,
     CCommunity_GetAppRichPresenceLocalization_Response)
 from .steam_client_enumerations import EMsg, EResult
+
+from ..caches.cache_helpers import PackageInfo
 
 logger = logging.getLogger(__name__)
 LOG_SENSITIVE_DATA = False
@@ -331,11 +333,11 @@ class ProtobufSocketHandler:
         return not product_info.response_pending
 
     # get user license information
-    async def PICSProductInfo_from_licenses(self, steam_licenses: List[CMsgClientLicenseListLicense]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
-        logger.info("Sending call %s with %d package_ids", EMsg.ClientPICSProductInfoRequest.name, len(steam_licenses))
+    async def PICSProductInfo_from_packages(self, package_data: Set[PackageInfo]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
+        logger.info("Sending call %s with %d package_ids", EMsg.ClientPICSProductInfoRequest.name, len(package_data))
         message = CMsgClientPICSProductInfoRequest()
 
-        message.packages = [CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token) for x in steam_licenses]
+        message.packages = [CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token) for x in package_data]
 
         job_id = self._get_job_id()
         send_header = self._generate_header(job_id)
@@ -351,11 +353,18 @@ class ProtobufSocketHandler:
             self._future_lookup.pop(job_id)
             raise
 
-    async def PICSProductInfo_from_apps(self, app_ids: List[int]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
+    async def PICSProductInfo_from_apps(self, app_ids: Set[int]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
         logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
         message = CMsgClientPICSProductInfoRequest()
 
-        message.apps = [CMsgClientPICSProductInfoRequestAppInfo(x) for x in app_ids]
+        if message.apps is None:
+            message.apps = []
+
+        #not sure if i can just provide one argument to this or if that will fail so i broke apart the list comprehension to be safe. 
+        for app_id in app_ids:
+            app = CMsgClientPICSProductInfoRequestAppInfo()
+            app.appid = app_id
+            message.apps.append(app)
         
         job_id = self._get_job_id()
         send_header = self._generate_header(job_id)
@@ -455,8 +464,6 @@ class ProtobufSocketHandler:
         else:
             logger.info("[Out] %s (%dB)", repr(emsg), len(data))
         await self._socket.send(data)
-
-
 
     async def _send_common(self, header: CMsgProtoBufHeader, msg: Message, request_emsg: EMsg, response_holder: AwaitableResponse, unique_identifier: int, override_steam_id: Optional[int] = None):
         """Perform the common send and receive logic.

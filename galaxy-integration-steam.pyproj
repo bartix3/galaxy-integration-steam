@@ -53,6 +53,7 @@
     <Content Include="requirements\app.txt" />
     <Content Include="requirements\dev.txt" />
     <Content Include="requirements\install.txt" />
+    <Content Include="src\steam_network\caches\server_connection_data_cache.py" />
     <Content Include="src\steam_network\protocol\message_helpers.py" />
     <Content Include="src\steam_network\web\css\style.css" />
     <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Light.ttf" />
@@ -77,8 +78,10 @@
     <Compile Include="src\local\win.py" />
     <Compile Include="src\local\__init__.py" />
     <Compile Include="src\steam_network\caches\cache_base.py" />
+    <Compile Include="src\steam_network\caches\cache_helpers.py" />
+    <Compile Include="src\steam_network\caches\friends_cache.py" />
     <Compile Include="src\steam_network\caches\games_cache.py" />
-    <Compile Include="src\steam_network\caches\package_cache.py" />
+    <Compile Include="src\steam_network\caches\packages_cache.py" />
     <Compile Include="src\steam_network\local_persistent_cache.py" />
     <Compile Include="src\plugin.py" />
     <Compile Include="src\steam_network\caches\__init__.py" />

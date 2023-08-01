@@ -12,38 +12,22 @@ class CacheBase(ABC):
     """
     def __init__(self):
         self._is_modified = False
-        self._ready_event = asyncio.Event()
 
     def is_modified(self) -> bool:
         """ Check if any data in this class has been modified since it was last reset. Does not resetthe modified state. 
         
         if the data is not ready, this function will throw an error. 
         """
-        pass
+        return self._is_modified
 
     def check_and_reset_modified(self) -> bool:
         """ Check if any data in this class has been modified since it was last reset. resets it so any modified checks will return false until a new change is made.
         
         if the data is not ready, this function will throw an error. 
         """
-        pass
-
-    def is_ready(self):
-        return self._ready_event.is_set()
-    
-    @abstractmethod
-    def handle_timeout_error(self):
-        """Called when wait_ready times out. should only be used to log that it timed out.
-        """
-        pass
-
-    async def wait_ready(self, timeout: Optional[int] = None):
-        try:
-            await asyncio.wait_for(self._ready_event.wait(), timeout)
-        except asyncio.TimeoutError:
-            self.handle_timeout_error()
-
-
+        ret_val = self._is_modified
+        self._is_modified = False
+        return ret_val
 
     #allowed for inherited classes but not public.
     T = TypeVar("T")

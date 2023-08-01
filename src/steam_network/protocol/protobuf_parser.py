@@ -20,6 +20,7 @@ from .messages.steammessages_clientserver import CMsgClientLicenseList
 from .steam_client_enumerations import EMsg, EResult
 from ..utils import GenericEvent, translate_error
 
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -37,7 +38,7 @@ class ProtobufProcessor():
     def __init__(self, queue: asyncio.Queue, future_lookup: Dict[int, AwaitableResponse], local_cache: LocalPersistentCache):
         self._queue = queue
         self._future_lookup = future_lookup
-        self._local_cache = local_cache
+        self._local_cache : LocalPersistentCache = local_cache
         #data needed to shut down this instance in the event of a recoverable error on the receiving end.
         #message processing is expected to be standalone but may require additional info from other messages first. These need to be wrapped in 
         self._task_list: List[asyncio.Task]
@@ -200,7 +201,7 @@ class ProtobufProcessor():
         If it is not yet confirmed, create a task and defer execution until that id is confirmed. if it is, then just call the coroutine immediately. 
         """
         data = CMsgClientLicenseList().parse(body)
-
+        self._local_cache.prepare_for_package_data()
         #check if we have the steam id. if we do, we don't need to wrap it in a task, it won't deadlock. If we don't, make sure to create a task and add it to proper place for cleanup.
         if self._has_steam_id():
             await self._check_license_list_against_steam_id(header, data, parent_multi)

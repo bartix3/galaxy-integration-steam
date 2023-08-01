@@ -11,9 +11,11 @@ from galaxy.api.errors import (AccessDenied, AuthenticationRequired,
                                BackendTimeout, InvalidCredentials,
                                NetworkError, UnknownBackendResponse)
 from galaxy.api.types import (Achievement, Authentication, Dlc, Game,
-                              GameLibrarySettings, GameTime, NextStep,
+                              GameLibrarySettings, GameTime, LicenseInfo, NextStep,
                               Subscription, SubscriptionDiscovery,
                               SubscriptionGame, UserInfo, UserPresence)
+from galaxy.api.consts import LicenseType
+
 from rsa import PublicKey
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
@@ -29,10 +31,12 @@ from .protocol.messages.service_cloudconfigstore import \
 from .protocol.messages.steammessages_auth import (
     CAuthentication_BeginAuthSessionViaCredentials_Response,
     CAuthentication_GetPasswordRSAPublicKey_Response, EAuthSessionGuardType)
+from .protocol.messages.steammessages_clientserver_appinfo import CMsgClientPICSProductInfoResponse, CMsgClientPICSProductInfoResponseAppInfo, CMsgClientPICSProductInfoResponsePackageInfo
 from .protocol.protobuf_parser import ProtobufProcessor
 from .protocol.protobuf_socket_handler import ProtobufSocketHandler
 from .utils import EResult, get_os, translate_error
 from .websocket_list import WebSocketList
+from .caches.cache_helpers import GameDummy, PackageInfo, SubscriptionPlusDLC, PackageAppUpdateEvent
 
 logger = logging.getLogger(__name__)
 
@@ -288,12 +292,103 @@ class SteamNetworkModel:
             return None
     #endregion
     #region Games
+    @staticmethod
+    def _extract_apps_from_package(packages: List[CMsgClientPICSProductInfoResponsePackageInfo], logger: logging.Logger) -> Dict[int, Set[int]]:
+        lookup: Dict[int, Set[int]] = {}
+        for package_info in packages:
+            package_id = package_info.packageid
+            package_content = vdf.binary_loads(package_info.buffer[4:])
+            package = package_content.get(str(package_id))
+            if package is None:
+                continue
+
+            app_ids: Set[int] = set()
+            try:
+                for x in package['appids'].values():
+                    app_ids.add(int(x))
+            except KeyError:
+                pass
+            
+            lookup[package_id] = app_ids
+
+        return lookup
+
+    @staticmethod
+    def _extra_game_data_from_apps(owns_app: Dict[int, bool], app_infos: List[CMsgClientPICSProductInfoResponseAppInfo], logger: logging.Logger) -> Dict[int, Union[Game, SubscriptionPlusDLC, GameDummy]]:
+        """"""
+        lookup: Dict[int, Union[Game, SubscriptionPlusDLC, GameDummy]] = {}
+        dlcs: Dict[int, Set[Dlc]] = {}
+
+        for app_info in app_infos:
+            appid = app_info.appid
+            app_content: dict = vdf.loads(app_info.buffer[:-1].decode('utf-8', 'replace'))
+            try:
+                app_type: str = app_content['appinfo']['common']['type'].lower()
+                title: str = app_content['appinfo']['common']['name']
+                parent: Optional[int] = None
+
+                if parent in app_content['appinfo']['common']:
+                    parent = int(app_content['appinfo']['common']['parent'])
+
+                logger.debug(f"Retrieved {app_type} '{title}'" + (f" for {parent}" if parent else ""))
+
+                if app_type == 'dlc':
+                    if not parent: 
+                        logger.warning("DLC %s found but no parent was specified. This DLC will be lost.", title)
+                    elif parent not in dlcs:
+                        dlcs[parent] = set([Dlc(appid, title, LicenseInfo(LicenseType.SinglePurchase, None))])
+                    else:
+                        dlcs[parent].add(Dlc(appid, title, LicenseInfo(LicenseType.SinglePurchase, None)))
+                elif app_type == 'game':
+                    if appid in owns_app and owns_app[appid]:
+                        lookup[appid] = Game(appid, title, [], LicenseInfo(LicenseType.SinglePurchase, None))
+                    elif appid not in lookup or isinstance(lookup[appid], GameDummy):
+                        lookup[appid] = SubscriptionPlusDLC(appid, title, None, None, [])
+                else:
+                    logger.warning(f"app '{title}' has unexpected type '{app_type}'")
+                
+
+            except KeyError as ex:
+                logger.warning(f"Unrecognized app structure in app {app_info.appid}: {repr(ex)}")
+                logger.debug(app_content)
+                lookup[appid] = GameDummy(appid)
+
+        for app_id, dlc_ids in dlcs.items():
+            if app_id in lookup and not isinstance(lookup[appid], GameDummy):
+                lookup[appid].dlcs = list(dlc_ids)
+            else:
+                logger.warning("Dlcs part of missing or invalid game with id: %d. DLCs lost: [%s]", app_id, ', '.join(str(dlc_ids)))
+
+        return lookup
+                
+
     async def proactive_games_task(self):
         """ Pre-emptively begin parsing game/subscription data. We're going to need to do it anyway, so do it ASAP.
 
         Started by the login process after a successful login, but before returning the results to GOG.
         """
-        pass
+        loop = asyncio.get_running_loop()
+        
+        packages_to_handle = await self._local_persistent_cache.package_cache.packages_updated_event.wait()
+        #ideally, we'd assume packages kept do not change and check them later. but we're just going to do all of them.
+        logger.info("Packages processed: %d Added, %d Removed, and %d (potentially) unchanged")
+        responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._msg_handler.PICSProductInfo_from_packages(set(packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
+        #get apps from the package metadata
+        packages = [package for response in responses for package in response.body.packages]
+        package_app_lookup: Dict[int, Set[int]] = await loop.run_in_executor(None, self._extract_apps_from_package, packages, logger)
+        self._local_persistent_cache.prepare_for_app_data()
+        #get the app metadata
+        apps_to_handle = self._local_persistent_cache.package_cache.update_packages_set_apps(package_app_lookup)
+        self._local_persistent_cache.compare_apps(apps_to_handle)
+        #again, ideally we should immediately parse what was added and defer the kept until later but we're just doing all of them.
+        new_or_kept_apps = apps_to_handle.apps_added + apps_to_handle.apps_kept
+        app_responses = await self._msg_handler.PICSProductInfo_from_apps(new_or_kept_apps)
+        #parse app metadata to get Games and SubsciptionGames
+        apps = [app for response in app_responses for app in response.body.apps]
+        app_owned_lookup = self._local_persistent_cache.package_cache.get_owned_apps()
+        app_lookup = await loop.run_in_executor(None, self._extra_game_data_from_apps, app_owned_lookup, apps, logger)
+        self._local_persistent_cache.update_apps(app_lookup)
+
 
 
 
@@ -311,6 +406,8 @@ class SteamNetworkModel:
     #endregion
 
     #region Achievements
+    #can't really proactively do the acheivements because they depend on games being done and it's not worth the hassle.
+
     async def get_unlocked_achievements(self, game_id: int) -> List[Achievement]:
         result = await self._msg_handler.GetUserStats(game_id)
         if result.eresult != EResult.OK:
