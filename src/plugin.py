@@ -54,7 +54,7 @@ COOLDOWN_TIME = 5
 AUTH_SETUP_ON_VERSION__CACHE_KEY = "auth_setup_on_version"
 LAUNCH_DEBOUNCE_TIME = 30
 
-
+#class SteamPlugin(Plugin[None, None, Dict[str, Set[int]], None, None, Dict[str, Manifest], None]):
 class SteamPlugin(Plugin):
     """Class that implements the steam plugin in a way that GOG Galaxy recognizes.
 
@@ -353,7 +353,7 @@ class SteamPlugin(Plugin):
     async def uninstall_game(self, game_id):
         self.local.steam_cmd("uninstall", game_id)
 
-    async def prepare_local_size_context(self, game_ids: List[str]):
+    async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, Manifest]:
         return {m.id(): m for m in self.local.manifests()}
 
     async def get_local_size(self, game_id: str, context: Dict[str, Manifest]) -> Optional[int]:

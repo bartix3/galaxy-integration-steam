@@ -51,7 +51,7 @@ class Manifest:
         return os.path.basename(self.path)[len('appmanifest_'):-4]
     
     def app_size(self):
-        with load_vdf(self.path):
+        with load_vdf(self.path) as manifest:
             app_state = manifest["AppState"]
             if StateFlags.FullyInstalled in StateFlags(int(app_state["StateFlags"])):
                 return int(app_state["SizeOnDisk"])
