@@ -1,4 +1,3 @@
-syntax = "proto2";
 import "steammessages_unified_base.proto";
 
 message CCloudConfigStore_Change_Notification {

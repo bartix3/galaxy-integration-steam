@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import betterproto
 
-from steammessages_base import CMsgIPAddress
+from .steammessages_base import CMsgIPAddress
 
 
 @dataclass

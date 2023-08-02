@@ -64,23 +64,25 @@ class BaseClient(ABC):
     # os dependant
 
     @abstractmethod
+    @staticmethod
     def get_configuration_folder() -> Optional[str]:
         pass
     
     @abstractmethod
+    @staticmethod
     def _is_uri_handler_installed() -> bool:
         pass
     
     @abstractmethod
-    def _get_steam_shutdown_cmd():
+    def _get_steam_shutdown_cmd(self):
         pass
     
     @abstractmethod
-    def latest() -> Iterable[LocalGame]:
+    def latest(self) -> Iterable[LocalGame]:
         pass
 
     @abstractmethod
-    def changed() -> Iterable[LocalGame]:
+    def changed(self) -> Iterable[LocalGame]:
         pass
     
     @abstractmethod
@@ -95,7 +97,7 @@ class BaseClient(ABC):
             # yield configuration_folder # default location
             config_path = os.path.join(configuration_folder, "steamapps", "libraryfolders.vdf")
             log.info("Finding library folders from: " + config_path)
-            with load_vdf(config_path):
+            with load_vdf(config_path) as config:
                 for library_folder in config["LibraryFolders"].values():
                     with suppress(TypeError):
                         library_folder = library_folder["path"]

@@ -7,7 +7,7 @@ from typing import List
 
 import betterproto
 
-from steammessages_clientserver_friends import CMsgClientPersonaStateFriend
+from .steammessages_clientserver_friends import CMsgClientPersonaStateFriend
 
 
 class EChatRoomJoinState(betterproto.Enum):

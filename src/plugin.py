@@ -21,12 +21,12 @@ import time
 from typing import (Any, AsyncGenerator, Dict, List, NewType, Optional, Set,
                     Tuple, Union, cast)
 
-from galaxy.api.consts import Platform
+from galaxy.api.consts import Platform, SubscriptionDiscovery
 from galaxy.api.errors import UnknownBackendResponse
 from galaxy.api.plugin import Plugin, create_and_run_plugin
 from galaxy.api.types import (Achievement, Authentication, Game,
                               GameLibrarySettings, GameTime, NextStep,
-                              Subscription, SubscriptionDiscovery,
+                              Subscription,
                               SubscriptionGame, UserInfo, UserPresence)
 from rsa import encrypt
 
@@ -98,7 +98,7 @@ class SteamPlugin(Plugin):
         # user credential data from dict includes a null check so we don't need it here.
         user_credential_data = UserCredentialData.from_dict(stored_credentials)
         if user_credential_data.is_valid():
-            auth = await self._attempt_client_login_common(user_credential_data.steam_id, user_credential_data.account_username, user_credential_data.refresh_token)
+            auth = await self._attempt_client_login_common(cast(int, user_credential_data.steam_id), cast(str, user_credential_data.account_username), cast(str, user_credential_data.refresh_token))
             if auth is None:
                 logger.info("Token Login failed from stored credentials. Can be caused when credentials expire or are deactivated. Falling back to normal login")
                 # fall through to regular login process.

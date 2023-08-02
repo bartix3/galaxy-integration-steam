@@ -118,13 +118,13 @@ class ModelAuthCredentialData():
     def client_id(self):
         return self._client_id
 
-    @property
-    def steam_id(self):
-        return self._steam_id
-
     @client_id.setter
     def client_id(self, value: int):
         self._client_id = value
+
+    @property
+    def steam_id(self):
+        return self._steam_id
 
     @property
     def request_id(self):

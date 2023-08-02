@@ -925,3 +925,9 @@ class CMsgClientGetPeerContentInfo(betterproto.Message):
 class CMsgClientGetPeerContentInfoResponse(betterproto.Message):
     result: int = betterproto.uint32_field(1)
     apps: List[int] = betterproto.uint32_field(2)
+
+
+@dataclass
+class CMsgClientFeatureGroupInfo(betterproto.Message):
+    groupid: int = betterproto.uint64_field(1)
+    members: List[int] = betterproto.uint32_field(2)

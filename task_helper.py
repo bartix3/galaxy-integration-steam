@@ -18,17 +18,18 @@ def _check_for_depedencies_or_reserved_variables(file_name:str) -> Tuple[List[st
     """
     with open(file_name, "r") as file:
         data = file.read()
-        matches: List[Match] = findall("^\s*import\s*\"([\w]+)\.proto\"\s*;", data, MULTILINE)
+        matches: List[Match[str]] = findall("^\s*import\s*\"([\w]+)\.proto\"\s*;", data, MULTILINE)
+        matches_2 = [match.group(0) for match in matches]
         hasReserved: bool = search(PROTO_RESERVED_REGEX, data) is not None
-        return matches, hasReserved
+        return matches_2, hasReserved
 
 
 def _retrieve_classes(file_data:str) -> Set[str]:
     matches: List[Match] = findall("^\s*(?:class|enum)\s+(\w+)\s*\(", file_data, MULTILINE)
-    return set(matches)
+    return set(map(lambda x: x.group(0), matches))
 
 def _retrieve_forward_references(file_data : str) -> Set[str]:
-    matches: set[Match] = set(findall(':\s*(?:List\s*\[\s*\r?\n?\s*|)"(\w+)"', file_data, MULTILINE)) #removes dupes during set cast. 
+    matches: Set[Match] = set(map(lambda x: x.group(0), findall(':\s*(?:List\s*\[\s*\r?\n?\s*|)"(\w+)"', file_data, MULTILINE))) #removes dupes during set cast. 
     return matches
         
 def _cleanup_dependencies(file_name: str, convert_to_proto_file_name : Callable[[str], str], convert_to_compiled_file_name: Callable[[str], str], cached_lookup: Dict[str, Set[str]]):
@@ -85,7 +86,7 @@ def _cleanup_dependencies(file_name: str, convert_to_proto_file_name : Callable[
                 found_references.sort()
                 forward_references -= item_classes
                 if (len(found_references) > 0):
-                    import_strings.append("from " + item + " import " + ", ".join(found_references))
+                    import_strings.append("from ." + item + " import " + ", ".join(found_references))
 
                 item = next(iterList, None)
 
@@ -110,7 +111,7 @@ def _cleanup_dependencies(file_name: str, convert_to_proto_file_name : Callable[
         compiled_file.truncate()  # cut off the rest of the content to protect from weird errors when the new content is shorter than the old content
 
 def cleanup_all_dependencies(all_files: List[str], convert_to_proto_file_name : Callable[[str], str], convert_to_compiled_file_name: Callable[[str], str]):
-    cache : Dict[str, List[str]] = {}
+    cache : Dict[str, Set[str]] = {}
     for file in all_files:
         _cleanup_dependencies(file, convert_to_proto_file_name, convert_to_compiled_file_name, cache)
 

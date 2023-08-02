@@ -12,7 +12,7 @@ from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
                                BackendTimeout, Banned, InvalidCredentials,
                                NetworkError, TemporaryBlocked, AuthenticationRequired, UnknownError)
 
-from typing import Optional, Generic, List, TypeVar, Tuple
+from typing import Optional, Generic, List, TypeVar, Tuple, cast
 
 from .protocol.steam_client_enumerations import EOSType, EResult
 import logging
@@ -69,7 +69,7 @@ def translate_error(result: EResult) -> Exception:
         "result": result
     }
     if result == EResult.LoggedInElsewhere:
-        return AuthenticationRequired(data)
+        return AuthenticationRequired(data=data)
     elif result in (
         EResult.InvalidPassword,
         EResult.AccountNotFound,
@@ -80,13 +80,13 @@ def translate_error(result: EResult) -> Exception:
         EResult.TwoFactorCodeMismatch,
         EResult.TwoFactorActivationCodeMismatch
     ):
-        return InvalidCredentials(data)
+        return InvalidCredentials(data=data)
     elif result in (
         EResult.ConnectFailed,
         EResult.IOFailure,
         EResult.RemoteDisconnect
     ):
-        return NetworkError(data)
+        return NetworkError(data=data)
     elif result in (
         EResult.Busy,
         EResult.ServiceUnavailable,
@@ -95,9 +95,9 @@ def translate_error(result: EResult) -> Exception:
         EResult.TryAnotherCM,
         EResult.Cancelled
     ):
-        return BackendNotAvailable(data)
+        return BackendNotAvailable(data=data)
     elif result == EResult.Timeout:
-        return BackendTimeout(data)
+        return BackendTimeout(data=data)
     elif result in (
         EResult.RateLimitExceeded,
         EResult.LimitExceeded,
@@ -105,9 +105,9 @@ def translate_error(result: EResult) -> Exception:
         EResult.AccountLocked,
         EResult.AccountLogonDeniedVerifiedEmailRequired
     ):
-        return TemporaryBlocked(data)
+        return TemporaryBlocked(data=data)
     elif result == EResult.Banned:
-        return Banned(data)
+        return Banned(data=data)
     elif result in (
         EResult.AccessDenied,
         EResult.InsufficientPrivilege,
@@ -117,7 +117,7 @@ def translate_error(result: EResult) -> Exception:
         EResult.AccountDisabled,
         EResult.AccountNotFeatured
     ):
-        return AccessDenied(data)
+        return AccessDenied(data=data)
     elif result in (
         EResult.DataCorruption,
         EResult.DiskFull,
@@ -125,9 +125,9 @@ def translate_error(result: EResult) -> Exception:
         EResult.RemoteFileConflict,
         EResult.BadResponse
     ):
-        return BackendError(data)
+        return BackendError(data=data)
 
-    return UnknownError(data)
+    return UnknownError(data=data)
 
 def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
     return format_exc(limit) if getError else ''.join(format_tb(limit=limit))
@@ -144,11 +144,11 @@ class GenericEvent(Event, Generic[T]):  # noqa: 302
         super().__init__() # Loop parameter removed in python 3.10, was generally deprecated. So we're not going to allow it here despite the fact the underlying type does. 
         self._generic_value: Optional[T] = None # _value might shadow the underlying variable of the same name and we don't want that. Probably fine but best not to risk it.
 
-    async def wait(self) -> T:
+    async def wait(self) -> T:  # type: ignore
         await super().wait()
-        return self._generic_value
+        return cast(T, self._generic_value)
 
-    def set(self, value: T) -> None:
+    def set(self, value: T) -> None:  # type: ignore
         self._generic_value = value
         super().set()
 

@@ -5,7 +5,7 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Dict, Iterable, List, Optional
 
-from galaxy.api.types import LocalGame, LocalGameState
+from galaxy.api.consts import LocalGame, LocalGameState
 from galaxy.registry_monitor import RegistryMonitor
 
 from .base import BaseClient
@@ -82,6 +82,7 @@ class WinClient(BaseClient):
                         state |= LocalGameState.Installed
                 states[game] = state
             return states
+        return None
         
     def latest(self) -> List[LocalGame]:
         self._states_last = self._states_latest() or self._states_last

@@ -7,8 +7,8 @@ from typing import List
 
 import betterproto
 
-from steammessages_base import CMsgAuthTicket, CMsgIPAddress
-from encrypted_app_ticket import EncryptedAppTicket
+from .steammessages_base import CMsgAuthTicket, CMsgIPAddress
+from .encrypted_app_ticket import EncryptedAppTicket
 
 
 @dataclass

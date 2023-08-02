@@ -7,8 +7,8 @@ from typing import List
 
 import betterproto
 
-from steammessages_base import CMsgIPAddress
-from enums import ESessionPersistence
+from .steammessages_base import CMsgIPAddress
+from .enums import ESessionPersistence
 
 
 class EAuthTokenPlatformType(betterproto.Enum):

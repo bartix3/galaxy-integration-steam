@@ -7,8 +7,8 @@ from typing import List
 
 import betterproto
 
-from steammessages_base import EBanContentCheckResult, UserContentDescriptorPreferences
-from enums import ECommunityItemClass, ENewSteamAnnouncementState, EProfileCustomizationType
+from .steammessages_base import EBanContentCheckResult, UserContentDescriptorPreferences
+from .enums import ECommunityItemClass, ENewSteamAnnouncementState, EProfileCustomizationType
 
 
 class EProfileCustomizationStyle(betterproto.Enum):
@@ -94,6 +94,7 @@ class CPlayer_GetOwnedGames_ResponseGame(betterproto.Message):
     has_dlc: bool = betterproto.bool_field(16)
     has_leaderboards: bool = betterproto.bool_field(17)
     content_descriptorids: List[int] = betterproto.uint32_field(18)
+    playtime_disconnected: int = betterproto.int32_field(19)
 
 
 @dataclass
@@ -692,6 +693,7 @@ class CPlayer_GetLastPlayedTimes_ResponseGame(betterproto.Message):
     last_windows_playtime: int = betterproto.uint32_field(12)
     last_mac_playtime: int = betterproto.uint32_field(13)
     last_linux_playtime: int = betterproto.uint32_field(14)
+    playtime_disconnected: int = betterproto.uint32_field(15)
 
 
 @dataclass

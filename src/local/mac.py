@@ -111,6 +111,5 @@ class MacClient(BaseClient):
             return NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier_(bundle_id) is not None
         return False
 
-    @staticmethod
-    def _get_steam_shutdown_cmd():
+    def _get_steam_shutdown_cmd(self):
         return "osascript -e 'quit app \"Steam\"'"

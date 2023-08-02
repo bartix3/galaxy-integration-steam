@@ -5,7 +5,7 @@ from platform import system
 from typing import Any, Dict
 
 import vdf
-from galaxy.api.types import LocalGameState
+from galaxy.api.consts import LocalGameState
 
 log = getLogger(__name__)
 
