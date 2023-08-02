@@ -51,7 +51,7 @@ class Manifest:
         return os.path.basename(self.path)[len('appmanifest_'):-4]
     
     def app_size(self):
-        with load_vdf(self.path) as manifest:
+        with load_vdf(self.path):
             app_state = manifest["AppState"]
             if StateFlags.FullyInstalled in StateFlags(int(app_state["StateFlags"])):
                 return int(app_state["SizeOnDisk"])
@@ -95,7 +95,7 @@ class BaseClient(ABC):
             # yield configuration_folder # default location
             config_path = os.path.join(configuration_folder, "steamapps", "libraryfolders.vdf")
             log.info("Finding library folders from: " + config_path)
-            with load_vdf(config_path) as config:
+            with load_vdf(config_path):
                 for library_folder in config["LibraryFolders"].values():
                     with suppress(TypeError):
                         library_folder = library_folder["path"]

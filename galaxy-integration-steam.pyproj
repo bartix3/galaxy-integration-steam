@@ -29,6 +29,7 @@
     <Content Include="galaxy-integration-steam.pyproj" />
     <Content Include="Install Certificates.command" />
     <Content Include="LICENSE" />
+    <Content Include="mypy.ini" />
     <Content Include="protobuf_files\protobuf_steammessages.txt" />
     <Content Include="protobuf_files\protobuf_webui.txt" />
     <Content Include="protobuf_files\proto\encrypted_app_ticket.proto" />
@@ -53,8 +54,13 @@
     <Content Include="requirements\app.txt" />
     <Content Include="requirements\dev.txt" />
     <Content Include="requirements\install.txt" />
+    <Content Include="src\py.typed" />
+    <Content Include="src\steam_network\caches\py.typed" />
     <Content Include="src\steam_network\caches\server_connection_data_cache.py" />
+    <Content Include="src\steam_network\protocol\messages\py.typed" />
     <Content Include="src\steam_network\protocol\message_helpers.py" />
+    <Content Include="src\steam_network\protocol\py.typed" />
+    <Content Include="src\steam_network\py.typed" />
     <Content Include="src\steam_network\web\css\style.css" />
     <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Light.ttf" />
     <Content Include="src\steam_network\web\fonts\LatoWeb\LatoWeb-Regular.ttf" />
@@ -71,6 +77,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="nethook_helpers.py" />
+    <Compile Include="src\setup.py" />
     <Compile Include="src\DEPRECATED_backend_steam_network.py" />
     <Compile Include="src\local\base.py" />
     <Compile Include="src\local\mac.py" />
@@ -121,6 +128,7 @@
     <Compile Include="src\steam_network\websocket_list.py" />
     <Compile Include="src\steam_network\__init__.py" />
     <Compile Include="src\version.py" />
+    <Compile Include="src\__init__.py" />
     <Compile Include="tasks.py" />
     <Compile Include="task_helper.py" />
     <Compile Include="tests\async_mock.py" />

@@ -11,7 +11,6 @@ import sys
 sys.path.append(path.join(BASE_DIR, "src"))
 
 from plugin import SteamPlugin, AUTH_SETUP_ON_VERSION__CACHE_KEY
-from backend_interface import BackendInterface
 from version import __version__
 
 

@@ -62,6 +62,7 @@ class SteamNetworkModel:
         self._server_cell_id = 0
         self._run_task: Optional[asyncio.Task] = None
         self._run_ready_event: asyncio.Event = asyncio.Event()
+        self._game_task: Optional[asyncio.Task] = None
         # normally, we'd just initialize the parser and persistent cache in handshake complete (where it makes sense), but the handshake complete call from Galaxy Client is not async.
         # so start the initialization as a background task, and the first time we need it and can await it (i.e. when we do auth), await the task.
 
@@ -284,6 +285,8 @@ class SteamNetworkModel:
 
         if eresult == EResult.OK and data.client_supplied_steamid != 0:
             self._msg_handler.on_TokenLogOn_success(data.client_instance_id, data.heartbeat_seconds) # start the heartbeat task so we don't get kicked out.
+            #start the game task so we have it when we need it.
+            self._game_task = asyncio.create_task(self._proactive_games_task)
             return ModelAuthClientLoginResult(data.client_supplied_steamid)
         elif eresult == EResult.AccessDenied:
             return None
@@ -362,23 +365,26 @@ class SteamNetworkModel:
         return lookup
                 
 
-    async def proactive_games_task(self):
+    async def _proactive_games_task(self):
         """ Pre-emptively begin parsing game/subscription data. We're going to need to do it anyway, so do it ASAP.
 
         Started by the login process after a successful login, but before returning the results to GOG.
         """
         loop = asyncio.get_running_loop()
-        
-        packages_to_handle = await self._local_persistent_cache.package_cache.packages_updated_event.wait()
-        #ideally, we'd assume packages kept do not change and check them later. but we're just going to do all of them.
-        logger.info("Packages processed: %d Added, %d Removed, and %d (potentially) unchanged")
-        responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._msg_handler.PICSProductInfo_from_packages(set(packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
-        #get apps from the package metadata
-        packages = [package for response in responses for package in response.body.packages]
-        package_app_lookup: Dict[int, Set[int]] = await loop.run_in_executor(None, self._extract_apps_from_package, packages, logger)
-        self._local_persistent_cache.prepare_for_app_data()
-        #get the app metadata
-        apps_to_handle = self._local_persistent_cache.package_cache.update_packages_set_apps(package_app_lookup)
+        if not self._local_persistent_cache.package_cache.packages_ready_event.is_set():
+            packages_to_handle = await self._local_persistent_cache.package_cache.packages_updated_event.wait()
+            #ideally, we'd assume packages kept do not change and check them later. but we're just going to do all of them.
+            logger.info("Packages processed: %d Added, %d Removed, and %d (potentially) unchanged")
+            responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._msg_handler.PICSProductInfo_from_packages(set    (packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
+            #get apps from the package metadata
+            packages = [package for response in responses for package in response.body.packages]
+            package_app_lookup: Dict[int, Set[int]] = await loop.run_in_executor(None, self._extract_apps_from_package, packages, logger)
+            self._local_persistent_cache.prepare_for_app_data()
+            #get the app metadata
+            apps_to_handle = self._local_persistent_cache.package_cache.update_packages_set_apps(package_app_lookup)
+        else:
+            apps_to_handle = self._local_persistent_cache.package_cache.packages_ready_event.wait()
+
         self._local_persistent_cache.compare_apps(apps_to_handle)
         #again, ideally we should immediately parse what was added and defer the kept until later but we're just doing all of them.
         new_or_kept_apps = apps_to_handle.apps_added + apps_to_handle.apps_kept
@@ -393,7 +399,17 @@ class SteamNetworkModel:
 
 
     async def get_owned_games(self) -> List[Game]:
-        pass
+        if self._local_persistent_cache.games_cache.games_and_subscriptions_ready.is_set():
+            return self._local_persistent_cache.get_games()
+        elif self._game_task is not None:
+            await self._game_task
+            return self._local_persistent_cache.get_games()
+        elif self._local_persistent_cache.package_cache.is_processing():
+            self._game_task = self._game_task = asyncio.create_task(self._proactive_games_task())
+            await self._game_task
+            return self._local_persistent_cache.get_games()
+        else: 
+            pass
 
     async def prepare_family_share(self) -> None:
         pass

@@ -1,7 +1,7 @@
-import asyncio
 import logging
 
 from abc import ABC, abstractmethod
+from asyncio import Event
 from typing import TypeVar, Dict, Optional, Any, List
 
 
@@ -12,6 +12,7 @@ class CacheBase(ABC):
     """
     def __init__(self):
         self._is_modified = False
+        self.checking_or_checked_against_steam_data : Event = Event()  # has the 
 
     def is_modified(self) -> bool:
         """ Check if any data in this class has been modified since it was last reset. Does not resetthe modified state. 

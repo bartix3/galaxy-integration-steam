@@ -8,6 +8,7 @@ from .caches.packages_cache import PackageCache
 from .caches.stats_cache import StatsCache
 from .caches.times_cache import TimesCache
 from .caches.websocket_cache_persistence import WebSocketCachePersistence
+from .caches.cache_helpers import PackageDataUpdateEvent
 from .protocol.message_helpers import MultiHandler
 from .protocol.messages.steammessages_base import CMsgProtoBufHeader
 from .protocol.messages.steammessages_clientserver import CMsgClientLicenseList
@@ -40,10 +41,26 @@ class LocalPersistentCache:
         self._confirmed_steam_id = confirmed_steam_id
 
     def prepare_for_package_data(self):
+        #notify the game and package caches that new data is incoming, they should mark themselves invalid.
         self.package_cache.prepare_for_server_data()
+        self.games_cache.prepare_for_package_update()
 
-    def compare_packages(self, package_id_owns_package_map: Dict[int, bool]):
-        self.package_cache.compare_packages(package_id_owns_package_map)
+    def compare_packages(self, package_id_owns_package_map: Dict[int, bool]) -> PackageDataUpdateEvent:
+        return self.package_cache.compare_packages(package_id_owns_package_map)
+
+    def is_processing_packages(self) -> bool:
+        return self.package_cache.is_processing() or not self.package_cache.packages_ready_event.is_set()
+
+    def is_processing_games_and_subscriptions(self) -> bool:
+        return self.is_processing_packages() or self.games_cache.apps_processing_event.is_set() or not self.games_cache.games_and_subscriptions_ready.is_set()
+
+    def are_packages_ready(self) -> bool:
+        return not self.is_processing_packages() and self.package_cache.checking_or_checked_against_steam_data.is_set()
+
+    def are_games_and_subscriptions_ready(self):
+        return not self.is_processing_games_and_subscriptions() and self.games_cache.checking_or_checked_against_steam_data.is_set()
+
+
 
 
     async def close(self):

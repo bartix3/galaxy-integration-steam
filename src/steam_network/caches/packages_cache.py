@@ -9,6 +9,7 @@ If a package is available to you via FamilyShare but you then purchase it for yo
 """
 import logging
 
+from asyncio import Event
 from typing import Any, Dict, Iterable, List, NamedTuple, Sequence, Set, cast
 
 from .cache_base import CacheBase
@@ -32,8 +33,15 @@ class PackageCache(CacheBase):
         # This data does not need to be cached as it can be generated from the package_lookup.
         # That said, it should be memoized to increase performance during runtime. 
         self._app_package_reverse_lookup: Dict[int, Set[PackageInfo]] = {}
-        self.packages_updated_event: GenericEvent[PackageDataUpdateEvent]
-        self.packages_ready_event: GenericEvent[PackageAppUpdateEvent]
+        #packages not ready, being processed. 
+        self.packages_processing_event: Event = Event
+        #packages are not ready but in the process of being updated. 
+        self.packages_updated_event: GenericEvent[PackageDataUpdateEvent] = GenericEvent[PackageDataUpdateEvent]()
+        #packages are ready. Can be used outside of get games checks to see if packages are ready 
+        self.packages_ready_event: GenericEvent[PackageAppUpdateEvent] = GenericEvent[PackageAppUpdateEvent]()
+    
+    def is_processing(self) -> bool:
+        return self.packages_processing_event.is_set() or self.packages_updated_event.is_set()
 
     def is_ready_for_caching(self) -> bool:
         return self.packages_ready_event.is_set()
@@ -61,8 +69,11 @@ class PackageCache(CacheBase):
     def prepare_for_server_data(self):
         self.packages_ready_event.clear()
         self.packages_updated_event.clear()
+        self.packages_processing_event.set()
+        if not self.checking_or_checked_against_steam_data.is_set():
+            self.checking_or_checked_against_steam_data.set()
 
-    def compare_packages(self, package_id_owner_lookup: Dict[int, bool]):
+    def compare_packages(self, package_id_owner_lookup: Dict[int, bool]) -> PackageDataUpdateEvent:
 
         intersect_ids = package_id_owner_lookup.keys() & self._package_lookup.keys()
         added_ids = package_id_owner_lookup.keys() - self._package_lookup.keys()
@@ -94,7 +105,10 @@ class PackageCache(CacheBase):
         intersect: List[PackageInfo] = [self._package_lookup[k] for k in intersect_ids]
 
         #fire off the event that notifies any listeners the packages updated. This is used by the steam_network_model, specifically the proactive_games_task function which is responsible for parsing the games.
-        self.packages_updated_event.set(PackageDataUpdateEvent(removed, added, intersect, cached_apps_lost))
+        self.packages_processing_event.clear()
+        data = PackageDataUpdateEvent(removed, added, intersect, cached_apps_lost)
+        self.packages_updated_event.set(data)
+        return data
 
     def update_packages_set_apps(self, data: Dict[int, Set[int]]) -> PackageAppUpdateEvent:
         packages_changed : set[PackageInfo] = set()
