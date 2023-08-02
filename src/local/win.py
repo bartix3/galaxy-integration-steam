@@ -5,7 +5,8 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Dict, Iterable, List, Optional
 
-from galaxy.api.consts import LocalGame, LocalGameState
+from galaxy.api.types import LocalGame
+from galaxy.api.consts import LocalGameState
 from galaxy.registry_monitor import RegistryMonitor
 
 from .base import BaseClient

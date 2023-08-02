@@ -5,7 +5,8 @@ from typing import Dict, Iterable, List
 from AppKit import NSWorkspace
 from CoreServices.LaunchServices import LSCopyDefaultHandlerForURLScheme
 from file_read_backwards import FileReadBackwards
-from galaxy.api.types import LocalGame, LocalGameState
+from galaxy.api.types import LocalGame
+from galaxy.api.consts import LocalGameState
 
 from .base import BaseClient
 from .shared import create_games_dict

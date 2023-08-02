@@ -71,6 +71,24 @@
     <Content Include="src\steam_network\web\img\icon-warning.svg" />
     <Content Include="src\manifest.json" />
     <Content Include="src\steam_network\web\index.html" />
+    <Content Include="stubs\galaxy-stubs\api\consts.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\errors.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\importer.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\jsonrpc.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\plugin.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\types.pyi" />
+    <Content Include="stubs\galaxy-stubs\api\__init__.pyi" />
+    <Content Include="stubs\galaxy-stubs\http.pyi" />
+    <Content Include="stubs\galaxy-stubs\proc_tools.pyi" />
+    <Content Include="stubs\galaxy-stubs\reader.pyi" />
+    <Content Include="stubs\galaxy-stubs\registry_monitor.pyi" />
+    <Content Include="stubs\galaxy-stubs\task_manager.pyi" />
+    <Content Include="stubs\galaxy-stubs\tools.pyi" />
+    <Content Include="stubs\galaxy-stubs\unittest\mock.pyi" />
+    <Content Include="stubs\galaxy-stubs\unittest\__init__.pyi" />
+    <Content Include="stubs\galaxy-stubs\__init__.pyi" />
+    <Content Include="stubs\vdf-stubs\vdict.pyi" />
+    <Content Include="stubs\vdf-stubs\__init__.pyi" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="setup.py" />
@@ -125,6 +143,13 @@
     <Compile Include="task_helper.py" />
   </ItemGroup>
   <ItemGroup>
+    <Folder Include="env\" />
+    <Folder Include="env\Lib\" />
+    <Folder Include="env\Lib\site-packages\" />
+    <Folder Include="env\Lib\site-packages\galaxy-stubs\" />
+    <Folder Include="env\Lib\site-packages\galaxy\" />
+    <Folder Include="env\Lib\site-packages\galaxy\api\" />
+    <Folder Include="stubs\" />
     <Folder Include="protobuf_files\" />
     <Folder Include="protobuf_files\proto\" />
     <Folder Include="requirements\" />
@@ -139,6 +164,10 @@
     <Folder Include="src\steam_network\caches\" />
     <Folder Include="src\steam_network\protocol" />
     <Folder Include="src\steam_network\protocol\messages\" />
+    <Folder Include="stubs\galaxy-stubs\" />
+    <Folder Include="stubs\galaxy-stubs\api\" />
+    <Folder Include="stubs\galaxy-stubs\unittest\" />
+    <Folder Include="stubs\vdf-stubs\" />
     <Folder Include="tests" />
   </ItemGroup>
   <ItemGroup>

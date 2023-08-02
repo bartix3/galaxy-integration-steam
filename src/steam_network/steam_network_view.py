@@ -76,7 +76,7 @@ class SteamNetworkView:
     def login_success_has_2fa(self, auth_modes: List[CAuthentication_AllowedConfirmation]) -> NextStep:
         bonus_data : Dict[str, str] = {}
 
-        view: WebpageView = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
+        view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[0])
 
         if view is None:
             raise UnknownBackendResponse()

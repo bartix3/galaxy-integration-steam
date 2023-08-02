@@ -3,7 +3,7 @@ import json
 import logging
 from asyncio import Task
 from typing import (Any, AsyncGenerator, Dict, Iterable, List, Optional, Set,
-                    Union)
+                    Union, cast)
 
 import vdf
 from galaxy.api.errors import (AccessDenied, AuthenticationRequired,
@@ -12,9 +12,9 @@ from galaxy.api.errors import (AccessDenied, AuthenticationRequired,
                                NetworkError, UnknownBackendResponse)
 from galaxy.api.types import (Achievement, Authentication, Dlc, Game,
                               GameLibrarySettings, GameTime, LicenseInfo, NextStep,
-                              Subscription, SubscriptionDiscovery,
+                              Subscription,
                               SubscriptionGame, UserInfo, UserPresence)
-from galaxy.api.consts import LicenseType
+from galaxy.api.consts import LicenseType, SubscriptionDiscovery
 
 from rsa import PublicKey
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
@@ -70,14 +70,18 @@ class SteamNetworkModel:
     def server_cell_id(self):
         return self._server_cell_id
 
+    @property
+    def _unchecked_msg_handler(self):
+        return cast(ProtobufSocketHandler, self._msg_handler)
+
     def initialize(self, persistent_cache):
         self._local_persistent_cache = LocalPersistentCache(persistent_cache)
         self._run_task = asyncio.create_task(self.run())
 
     @staticmethod
-    async def _create_socket_handler(websocket_connection_list: WebSocketList, cell_id: int, queue: asyncio.Queue) -> ProtobufSocketHandler:
+    async def _create_socket_handler(websocket_connection_list: WebSocketList, cell_id: int, queue: asyncio.Queue, future_lookup: Dict[int, AwaitableResponse]) -> ProtobufSocketHandler:
         websocket_uri, websocket = await websocket_connection_list.connect_to_best_available(cell_id)
-        return ProtobufSocketHandler(websocket_uri, websocket, queue)
+        return ProtobufSocketHandler(websocket_uri, websocket, queue, future_lookup)
 
     async def run(self):
         """ Create and run the asyncio tasks necessary to receive and process all socket calls.
@@ -204,7 +208,7 @@ class SteamNetworkModel:
         pass
 
     async def retrieve_rsa_key(self, username: str) -> Union[SteamPublicKey, ModelAuthError]:
-        result: ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response] = await self._msg_handler.GetPasswordRSAPublicKey(username)
+        result: ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response] = await self._unchecked_msg_handler.GetPasswordRSAPublicKey(username)
         # first case: a dropped message due to the client logging off. We can recover but we need to resend the message so it isn't lost.
         if result.eresult == EResult.TryAnotherCM:
             await self._run_ready_event.wait()
@@ -217,7 +221,7 @@ class SteamNetworkModel:
             return SteamPublicKey(PublicKey(int(message.publickey_mod, 16), int(message.publickey_exp, 16)), message.timestamp)
 
     async def login_with_credentials(self, username: str, enciphered_password: bytes, timestamp: int, language: str = "english") -> Union[ModelAuthCredentialData, ModelAuthError]:
-        result: ProtoResult[CAuthentication_BeginAuthSessionViaCredentials_Response] = await self._msg_handler.BeginAuthSessionViaCredentials(username, enciphered_password, timestamp, get_os(), language)
+        result: ProtoResult[CAuthentication_BeginAuthSessionViaCredentials_Response] = await self._unchecked_msg_handler.BeginAuthSessionViaCredentials(username, enciphered_password, timestamp, get_os(), language)
         eresult: EResult = result.eresult
         if (eresult == EResult.TryAnotherCM):
             await self._run_ready_event.wait()
@@ -239,7 +243,7 @@ class SteamNetworkModel:
 
     async def update_two_factor(self, client_id: int, steam_id: int, code: str, is_email: bool) -> Optional[ModelAuthError]:
         code_type: EAuthSessionGuardType = EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode if is_email else EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode
-        result = await self._msg_handler.UpdateAuthSessionWithSteamGuardCode(client_id, steam_id, code, code_type)
+        result = await self._unchecked_msg_handler.UpdateAuthSessionWithSteamGuardCode(client_id, steam_id, code, code_type)
         eresult = result.eresult
         if eresult == EResult.TryAnotherCM:
             await self._run_ready_event.wait()
@@ -254,7 +258,7 @@ class SteamNetworkModel:
             raise translate_error(eresult)
 
     async def check_authentication_status(self, client_id: int, request_id: bytes, using_mobile_confirm: bool) -> Union[ModelAuthPollResult, ModelAuthPollError]:
-        result = await self._msg_handler.PollAuthSessionStatus(client_id, request_id)
+        result = await self._unchecked_msg_handler.PollAuthSessionStatus(client_id, request_id)
         eresult = result.eresult
         data = result.body
         if eresult == EResult.TryAnotherCM:
@@ -279,12 +283,12 @@ class SteamNetworkModel:
 
     # if this fails, we don't care why - it either means our old stored credentials were bad and we just need to renew them, or despite getting a refresh token it's somehow invalid. The latter is not recoverable.
     async def steam_client_login(self, account_name: str, steam_id: int, access_token: str, os_value: int, language: str = "english") -> Optional[ModelAuthClientLoginResult]:
-        result = await self._msg_handler.TokenLogOn(account_name, steam_id, access_token, self.server_cell_id, self._local_persistent_cache.get_machine_id(), os_value, language)
+        result = await self._unchecked_msg_handler.TokenLogOn(account_name, steam_id, access_token, self.server_cell_id, self._local_persistent_cache.get_machine_id(), os_value, language)
         eresult = result.eresult
         data = result.body
 
         if eresult == EResult.OK and data.client_supplied_steamid != 0:
-            self._msg_handler.on_TokenLogOn_success(data.client_instance_id, data.heartbeat_seconds) # start the heartbeat task so we don't get kicked out.
+            self._unchecked_msg_handler.on_TokenLogOn_success(data.client_instance_id, data.heartbeat_seconds) # start the heartbeat task so we don't get kicked out.
             #start the game task so we have it when we need it.
             self._game_task = asyncio.create_task(self._proactive_games_task)
             return ModelAuthClientLoginResult(data.client_supplied_steamid)
@@ -375,7 +379,8 @@ class SteamNetworkModel:
             packages_to_handle = await self._local_persistent_cache.package_cache.packages_updated_event.wait()
             #ideally, we'd assume packages kept do not change and check them later. but we're just going to do all of them.
             logger.info("Packages processed: %d Added, %d Removed, and %d (potentially) unchanged")
-            responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._msg_handler.PICSProductInfo_from_packages(set    (packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
+            responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._unchecked_msg_handler.PICSProductInfo_from_packages(
+                set(packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
             #get apps from the package metadata
             packages = [package for response in responses for package in response.body.packages]
             package_app_lookup: Dict[int, Set[int]] = await loop.run_in_executor(None, self._extract_apps_from_package, packages, logger)
@@ -388,7 +393,7 @@ class SteamNetworkModel:
         self._local_persistent_cache.compare_apps(apps_to_handle)
         #again, ideally we should immediately parse what was added and defer the kept until later but we're just doing all of them.
         new_or_kept_apps = apps_to_handle.apps_added + apps_to_handle.apps_kept
-        app_responses = await self._msg_handler.PICSProductInfo_from_apps(new_or_kept_apps)
+        app_responses = await self._unchecked_msg_handler.PICSProductInfo_from_apps(new_or_kept_apps)
         #parse app metadata to get Games and SubsciptionGames
         apps = [app for response in app_responses for app in response.body.apps]
         app_owned_lookup = self._local_persistent_cache.package_cache.get_owned_apps()
@@ -425,7 +430,7 @@ class SteamNetworkModel:
     #can't really proactively do the acheivements because they depend on games being done and it's not worth the hassle.
 
     async def get_unlocked_achievements(self, game_id: int) -> List[Achievement]:
-        result = await self._msg_handler.GetUserStats(game_id)
+        result = await self._unchecked_msg_handler.GetUserStats(game_id)
         if result.eresult != EResult.OK:
             return []
 
@@ -495,7 +500,7 @@ class SteamNetworkModel:
 
     #region User-defined settings applied to their games
     async def begin_get_tags_hidden_etc(self) -> Dict[str, Set[int]]:
-        result = await self._msg_handler.ConfigStore_Download()
+        result = await self._unchecked_msg_handler.ConfigStore_Download()
         tag_lookup: Dict[str, Set[int]] = {}
 
         tag_lookup: Dict[str, Set[int]] = {}

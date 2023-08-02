@@ -13,7 +13,10 @@ Integrated @urwrstkn8mare's fixes to clean up the os-dependent code into a dedic
 CHANGELOG: 7/2/2023:
 Moved all controller login to plugin. there was no point in having that logic there and not here, now that the os-dependent code is abstracted out to its own folder
 
+CHANGELOG: 8/1/2023: 
+MyPy fixes
 """
+
 import asyncio
 import logging
 import sys
@@ -108,7 +111,7 @@ class SteamPlugin(Plugin):
         self.store_credentials({})  # clear the credentials. May already be clear but we just want to make sure.
         return self._view.fallback_login_page(True, self._use_paranoid_login)
 
-    async def pass_login_credentials(self, credentials: Dict[str, str], _: List[Dict[str, str]]) -> Union[Authentication, NextStep]:
+    async def pass_login_credentials(self, _: str, credentials: Dict[str, str], __: List[Dict[str, str]]) -> Union[Authentication, NextStep]:
         login_state = self._view.get_WebPage(credentials["end_uri"])
         if login_state == WebpageView.LOGIN:
             logger.info("Processing standard login page results.")
@@ -360,6 +363,8 @@ class SteamPlugin(Plugin):
         m = context.get(game_id)
         if m:
             return m.app_size()
+        else: 
+            return None
 
     async def shutdown_platform_client(self) -> None:
         if time.time() < self._last_launch + LAUNCH_DEBOUNCE_TIME:

@@ -204,8 +204,9 @@ class ProtobufSocketHandler:
         message.encryption_timestamp = timestamp
         message.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
         message.persistence = ESessionPersistence.k_ESessionPersistence_Persistent
-        if language:
-            message.language = language
+        #TODO: Find the language enum steam uses and add it to client enumerations.
+        #if language:
+        #    message.language = language
 
         message.device_details.device_friendly_name = friendly_name
         message.device_details.os_type = os_value if os_value >= 0 else 0
@@ -294,7 +295,7 @@ class ProtobufSocketHandler:
         message = CMsgClientLogOff()
         logger.info("Sending log off message")
         try:
-            header, resp = await self._send_recv(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
+            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
             return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
             return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
@@ -327,6 +328,7 @@ class ProtobufSocketHandler:
             return ProtoResult(header.eresult, header.error_message, response)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
 
     @staticmethod
     def _PICS_done(product_info : CMsgClientPICSProductInfoResponse) -> bool:
@@ -389,6 +391,7 @@ class ProtobufSocketHandler:
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
 
     async def ConfigStore_Download(self) -> ProtoResult[CCloudConfigStore_Download_Response]:
         logger.debug("sending ConfigStore download request")
@@ -402,6 +405,7 @@ class ProtobufSocketHandler:
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
 
     async def GetLastPlayedTimes(self) -> ProtoResult[CPlayer_GetLastPlayedTimes_Response]:
         logger.info("Importing game times")
@@ -412,6 +416,7 @@ class ProtobufSocketHandler:
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
 
     async def close(self, send_log_off: bool):
         if send_log_off:
@@ -448,7 +453,7 @@ class ProtobufSocketHandler:
         # provide the information about the message being sent before the header and body.
         # Magic string decoded: < = little endian. 2I = 2 x unsigned integer.
         # emsg | proto_mask is the first UInt (describes what we are sending), length of header is the second UInt.
-        msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(header))
+        msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(head))
         return msg_info + head + body
 
     async def _send_no_wait(self, msg: Message, emsg: EMsg, job_id: int, job_name: Optional[str] = None):
@@ -480,7 +485,7 @@ class ProtobufSocketHandler:
             await self._socket.send(data)
         except Exception as e:
             logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
-            response_holder.get_future.cancel()
+            response_holder.get_future().cancel()
             self._future_lookup.pop(unique_identifier)
             raise
 

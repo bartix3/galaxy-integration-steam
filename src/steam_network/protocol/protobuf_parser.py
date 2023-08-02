@@ -26,6 +26,8 @@ logger.setLevel(logging.INFO)
 
 class ProtobufProcessor():
     _RECEIVE_DATA_TIMEOUT_SECONDS = 5
+    _PROTO_MASK = 0x80000000
+    _ACCOUNT_ID_MASK = 0x0110000100000000
 
     """ Processes the results from the websocket to their protobuf format and then implements or calls a function that will perform further handling of the data.
 
@@ -107,7 +109,7 @@ class ProtobufProcessor():
                     logger.info("New session id: %d", header.client_sessionid)
                     self._session_id = header.client_sessionid
                 if self._session_id != header.client_sessionid:
-                    logger.warning('Received session_id %s while client one is %s', header.client_sessionid, self._session_id)
+                    logger.warning('Received session_id %d while client one is %d', header.client_sessionid, self._session_id)
 
             await self._process_message(emsg, header, packet[8 + header_len:], containing_multi)
         else:
@@ -134,7 +136,7 @@ class ProtobufProcessor():
                 is_expected, log_msg = future_info.matches_identifier_with_log_message(emsg, header.target_job_name)
                 if not is_expected:
                     logger.warning(log_msg)
-                elif future_info.future.cancelled():
+                elif future_info.get_future().cancelled():
                     logger.warning("Attempted to set future to the processed message, but it was already cancelled. Removing it from the list")
                     self._future_lookup.pop(lookup)
                     return
@@ -169,13 +171,13 @@ class ProtobufProcessor():
 
         while offset + size_bytes <= data_size:
             size = int.from_bytes(data[offset:offset + size_bytes], "little")
-            self._process_packet(data[offset + size_bytes:offset + size_bytes + size], info_about_me)
+            await self._process_packet(data[offset + size_bytes:offset + size_bytes + size], info_about_me)
             offset += size_bytes + size
             packets_parsed += 1
 
         logger.debug("Finished processing message Multi. %d packets parsed", packets_parsed)
         info_about_me.on_multi_complete_event.set(header)
-        data = await asyncio.gather(info_about_me.post_multi_complete_gather_task_list, return_exceptions=True)
+        data = await asyncio.gather(*info_about_me.post_multi_complete_gather_task_list, return_exceptions=True)
         for result in data:
             if isinstance(result, Exception):
                 logger.error("Error in multi gather call " + repr(result))
@@ -184,7 +186,7 @@ class ProtobufProcessor():
         if emsg == EMsg.ClientLoggedOff:
                 self._process_client_logged_off(EResult(header.eresult))
         elif emsg == EMsg.ClientLicenseList:
-            await self._process_license_list(header, body)
+            await self._process_license_list_message(header, body, parent_multi)
         else:
             logger.warning("Received an unsolicited message")
             logger.warning("Ignored message %d", emsg)
@@ -203,7 +205,7 @@ class ProtobufProcessor():
         data = CMsgClientLicenseList().parse(body)
         self._local_cache.prepare_for_package_data()
         #check if we have the steam id. if we do, we don't need to wrap it in a task, it won't deadlock. If we don't, make sure to create a task and add it to proper place for cleanup.
-        if self._has_steam_id():
+        if self.has_steam_id():
             await self._check_license_list_against_steam_id(header, data, parent_multi)
         else:
             task = asyncio.create_task(self._check_license_list_against_steam_id(header, data, parent_multi))
@@ -223,7 +225,7 @@ class ProtobufProcessor():
         If no parent multi exists, it runs this task immediately instead. If this task is already started, does not spawn an additional task.
         """
         await self._steam_id_ready_event.wait()
-        steam_id = self._confirmed_steam_id
+        steam_id = cast(int, self._confirmed_steam_id)
         owner_id = int(steam_id - self._ACCOUNT_ID_MASK)
 
         #Normally we attach this to the parent multi and wait for that to finish before checking the licenses. If no such multi exists, we have to do it all at once. 
@@ -233,7 +235,7 @@ class ProtobufProcessor():
         #try to start the task that will update the cache that all licenses have been processed from the servers. Will not do so if there is no parent multi to attach to or if one already exists.
         if not complete_processing_immediately and not self._processing_licenses:
             task = asyncio.create_task(self._all_known_licenses_processed_update_cache(parent_multi))
-            parent_multi.post_multi_complete_gather_task_list.append(task)
+            cast(MultiHandler, parent_multi).post_multi_complete_gather_task_list.append(task)
         
         #set the flag so we know not to create additional task(s) for the license list.
         self._processing_licenses = True
@@ -252,7 +254,7 @@ class ProtobufProcessor():
     
     async def _all_known_licenses_processed_update_cache(self, client_login_multi: Optional[MultiHandler]):
         if client_login_multi is not None:
-            _ = client_login_multi.on_multi_end_event.wait()
+            _ = client_login_multi.on_multi_complete_event.wait()
 
         self._local_cache.compare_packages(self._package_to_owned_access_lookup)
         self._processing_licenses = False

@@ -50,7 +50,7 @@ class WebpageView(ViewPage, Enum):
     PARANOID_ENCIPHERED = ViewPage("provide_echiphered", "enciphered_password_finished", r".*enchiphered_password_finished.*")
 
     @staticmethod
-    def from_CAuthentication_AllowedConfirmation(guard_type: CAuthentication_AllowedConfirmation) -> WebpageView:
+    def from_CAuthentication_AllowedConfirmation(guard_type: CAuthentication_AllowedConfirmation) -> Optional[WebpageView]:
         return WebpageView.from_EAuthSessionGuardType(guard_type.confirmation_type)
 
     @staticmethod
