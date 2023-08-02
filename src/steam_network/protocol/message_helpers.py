@@ -31,6 +31,9 @@ _ITERATOR_WIDTH = 20
 def generate_job_id(iterator: Iterator[int]) -> int:
     pass
 
+class OwnedTokenTuple(NamedTuple):
+    owns_package: bool
+    access_token: int
 
 
 class MultiHandler(NamedTuple):

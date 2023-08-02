@@ -13,7 +13,7 @@ from typing import Dict, Optional, List, Set, Tuple, cast
 from websockets.typing import Data
 
 from ..local_persistent_cache import LocalPersistentCache
-from .message_helpers import AwaitableResponse, MultiHandler
+from .message_helpers import AwaitableResponse, MultiHandler, OwnedTokenTuple
 from .messages.steammessages_base import CMsgMulti, CMsgProtoBufHeader
 from .messages.steammessages_clientserver import CMsgClientLicenseList
 
@@ -50,7 +50,7 @@ class ProtobufProcessor():
         self._confirmed_steam_id : Optional[int] = None
         #license list
         self._processing_licenses : bool = False
-        self._package_is_owned_lookup : Dict[int, bool] = {}
+        self._package_to_owned_access_lookup : Dict[int, OwnedTokenTuple] = {}
         #friend list
         self._processing_friend_ids: bool = False
         self._friend_id_list: List[int] = []
@@ -240,10 +240,11 @@ class ProtobufProcessor():
 
         for license_data in data.licenses:
             owns_package = owner_id == license_data.owner_id
+            access_token = license_data.access_token
             package_id = license_data.package_id
             #may have access to the package from multiple sources. If one form of access is ownership, it overrides all the others. If not, only add it if it's not already there.
-            if owns_package or package_id not in self._package_is_owned_lookup:
-                self._package_is_owned_lookup[package_id] = owns_package
+            if owns_package or package_id not in self._package_to_owned_access_lookup:
+                self._package_to_owned_access_lookup[package_id] = OwnedTokenTuple(owns_package, access_token)
 
         # if we hit the edge case where we have no parent multi, complete the code immediately. 
         if complete_processing_immediately:
@@ -253,9 +254,9 @@ class ProtobufProcessor():
         if client_login_multi is not None:
             _ = client_login_multi.on_multi_end_event.wait()
 
-        self._local_cache.compare_packages(self._package_is_owned_lookup)
+        self._local_cache.compare_packages(self._package_to_owned_access_lookup)
         self._processing_licenses = False
-        self._package_is_owned_lookup.clear()
+        self._package_to_owned_access_lookup.clear()
     #endregion License List
     #region Friend Data
     async def _process_friend_list_message(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):

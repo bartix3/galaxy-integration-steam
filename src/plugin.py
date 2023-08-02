@@ -28,7 +28,7 @@ from galaxy.api.types import (Achievement, Authentication, Game,
                               GameLibrarySettings, GameTime, NextStep,
                               Subscription,
                               SubscriptionGame, UserInfo, UserPresence)
-from rsa import encrypt
+from rsa import encrypt, PublicKey
 
 from .local import Client as LocalClient
 from .local.base import Manifest
@@ -166,7 +166,7 @@ class SteamPlugin(Plugin):
         data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, False)
         if isinstance(data_or_error, ModelAuthPollError):
             self._two_factor_info.client_id = data_or_error.new_client_id
-            return self._view.two_factor_code_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, data_or_error, self._use_paranoid_login))
+            return self._view.two_factor_code_failed(self._two_factor_info.allowed_authentication_methods, cast(ModelAuthError, data_or_error), self._use_paranoid_login)
 
         self._two_factor_info = None  # clear 2FA info since we just completed 2FA successfully.
         return await self._attempt_client_login(data_or_error)
@@ -195,7 +195,7 @@ class SteamPlugin(Plugin):
         return self._view.paranoid_username_success(username, key_data.rsa_public_key, key_data.timestamp)
 
     async def _handle_manual_enciphering_result(self, credentials: Dict[str, str]) -> Union[Authentication, NextStep]:
-        fallback_or_data = self._view.retrieve_data_paranoid_pt2(credentials)
+        fallback_or_data = self._view.retrieve_data_paranoid_pt2(credentials, PublicKey(int(credentials["mod"]), int(credentials["exp"])))
         if isinstance(fallback_or_data, NextStep):
             return fallback_or_data
 
@@ -230,7 +230,8 @@ class SteamPlugin(Plugin):
                 return self._view.login_failed(error)
 
     async def _handle_steam_guard_none(self) -> Authentication:
-        authentication_data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, False)
+        info = cast(ModelAuthCredentialData, self._two_factor_info)
+        authentication_data_or_error = await self._model.check_authentication_status(info.client_id, info.request_id, False)
         if isinstance(authentication_data_or_error, ModelAuthPollResult):
             return await self._attempt_client_login(authentication_data_or_error)
         else:
@@ -238,7 +239,7 @@ class SteamPlugin(Plugin):
             raise UnknownBackendResponse()
 
     async def _attempt_client_login(self, poll_result: ModelAuthPollResult) -> Authentication:
-        auth = await self._attempt_client_login_common(self._unauthed_steam_id, poll_result.account_name, poll_result.refresh_token)
+        auth = await self._attempt_client_login_common(cast(int, self._unauthed_steam_id), poll_result.account_name, poll_result.refresh_token)
         if auth is None:
             logger.warning("Client Login failed despite credential login succeeding. Nothing to fall back to.")
             raise UnknownBackendResponse()

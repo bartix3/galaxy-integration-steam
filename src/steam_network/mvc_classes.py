@@ -4,9 +4,10 @@ A collection of classes that the steam network model-view-controller will use to
 
 """
 from __future__ import annotations
+from dataclasses import dataclass
 
 from enum import Enum, IntEnum
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from rsa import PublicKey
 
@@ -53,7 +54,7 @@ class WebpageView(ViewPage, Enum):
         return WebpageView.from_EAuthSessionGuardType(guard_type.confirmation_type)
 
     @staticmethod
-    def from_EAuthSessionGuardType(method: EAuthSessionGuardType) -> WebpageView:
+    def from_EAuthSessionGuardType(method: EAuthSessionGuardType) -> Optional[WebpageView]:
         if method == EAuthSessionGuardType.k_EAuthSessionGuardType_EmailCode:
             return WebpageView.TWO_FACTOR_MAIL
         elif method == EAuthSessionGuardType.k_EAuthSessionGuardType_DeviceCode:
@@ -63,15 +64,16 @@ class WebpageView(ViewPage, Enum):
         else:  # if (method == EAuthSessionGuardType.k_EAuthSessionGuardType_None): #or invalid
             return None
 
-
-class ModelAuthError(NamedTuple):
+@dataclass
+class ModelAuthError:
     """ an error from the model during authentication that the view can use to populate the webpage with error messages.
     """
     error_code: AuthErrorCode
     steam_error_message: str
 
 
-class ModelAuthPollError(ModelAuthError, NamedTuple):
+@dataclass
+class ModelAuthPollError(ModelAuthError):
     new_client_id: int
 
 

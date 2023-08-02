@@ -9,6 +9,7 @@ from galaxy.api.types import Dlc, Game, GameLibrarySettings, GameTime, LicenseIn
 from galaxy.api.consts import LicenseType
 
 from .cache_base import CacheBase
+from .cache_helpers import SubscriptionPlusDLC
 
 class GamesCache(CacheBase):
     def __init__(self) -> None:

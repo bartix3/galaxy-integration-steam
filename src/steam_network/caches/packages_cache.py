@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Sequence, Set, cast
 
 from .cache_base import CacheBase
 from .cache_helpers import PackageAppUpdateEvent, PackageDataUpdateEvent, PackageInfo
+from ..protocol.message_helpers import OwnedTokenTuple
 from ..utils import GenericEvent
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class PackageCache(CacheBase):
         self._package_lookup.clear()
         self._app_package_reverse_lookup.clear()
 
-        if self._PACKAGES_CACHE_NAME in cache_data and isinstance(cache_data[self._PACKAGES_CACHE_NAME], List[PackageInfo]):
+        if self._PACKAGES_CACHE_NAME in cache_data and isinstance(cache_data[self._PACKAGES_CACHE_NAME], list):
             packages = cast(List[PackageInfo], cache_data[self._PACKAGES_CACHE_NAME])
             self._package_lookup = { x.package_id: x for x in packages }
 
@@ -61,9 +62,9 @@ class PackageCache(CacheBase):
         for package in self._package_lookup.values():
             for app in package.apps:
                 if app not in self._app_package_reverse_lookup:
-                    self._app_package_reverse_lookup[app] = set([ package.package_id])
+                    self._app_package_reverse_lookup[app] = set([ package])
                 else:
-                    self._app_package_reverse_lookup[app].append(package.package_id)
+                    self._app_package_reverse_lookup[app].add(package)
 
 
     def prepare_for_server_data(self):
@@ -73,7 +74,7 @@ class PackageCache(CacheBase):
         if not self.checking_or_checked_against_steam_data.is_set():
             self.checking_or_checked_against_steam_data.set()
 
-    def compare_packages(self, package_id_owner_lookup: Dict[int, bool]) -> PackageDataUpdateEvent:
+    def compare_packages(self, package_id_owner_lookup: Dict[int, OwnedTokenTuple]) -> PackageDataUpdateEvent:
 
         intersect_ids = package_id_owner_lookup.keys() & self._package_lookup.keys()
         added_ids = package_id_owner_lookup.keys() - self._package_lookup.keys()
@@ -98,7 +99,13 @@ class PackageCache(CacheBase):
 
         added: List[PackageInfo] = []
         for k in added_ids:
-            package = PackageInfo(k, set(), package_id_owner_lookup[k])
+            if k in package_id_owner_lookup:
+                owns_game = package_id_owner_lookup[k].owns_package
+                access_token = package_id_owner_lookup[k].access_token
+            else:
+                owns_game = False
+                access_token = 0
+            package = PackageInfo(k, access_token, set(), owns_game)
             self._package_lookup[k] = package
             added.append(package)
 
@@ -111,7 +118,7 @@ class PackageCache(CacheBase):
         return data
 
     def update_packages_set_apps(self, data: Dict[int, Set[int]]) -> PackageAppUpdateEvent:
-        packages_changed : set[PackageInfo] = set()
+        packages_changed : Set[PackageInfo] = set()
         apps_lost: Set[int] = set()
         apps_added: Set[int] = set()
         all_apps: Set[int] = set(self._app_package_reverse_lookup.keys())
@@ -159,4 +166,5 @@ class PackageCache(CacheBase):
         lookup: Dict[int, bool] = {}
         for app, packages in self._app_package_reverse_lookup.items():
             lookup[app] = any(x.owned_by_cached_user for x in packages)
+        return lookup
 

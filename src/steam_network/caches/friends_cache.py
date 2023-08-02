@@ -5,3 +5,7 @@ Updates the legacy FriendsCache.
 
 Note that user presense information is not cached. It is updated on-demand, so there's no reason to store it. 
 """
+from .cache_base import CacheBase
+
+class FriendsCache(CacheBase):
+    pass

@@ -129,7 +129,7 @@ class SteamNetworkView:
         start_uri = self._build_start_uri(WebpageView.PARANOID_ENCIPHERED.view_name, **bonus_data)
         return self._build_NextStep(start_uri, WebpageView.PARANOID_ENCIPHERED.end_uri_regex)
 
-    def paranoid_username_failed(self) -> NextStep:
+    def paranoid_username_failed(self, error: ModelAuthError) -> NextStep:
         start_uri = self._build_start_uri(WebpageView.PARANOID_USER.view_name, login_failure="missing_username")
         return self._build_NextStep(start_uri, WebpageView.PARANOID_USER.end_uri_regex)
 

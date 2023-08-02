@@ -22,7 +22,7 @@ class PackageDataUpdateEvent(NamedTuple):
     cached_apps_lost: List[int]
 
 class PackageAppUpdateEvent(NamedTuple):
-    packages_update: List[PackageInfo]
+    packages_update: Set[PackageInfo]
     apps_lost: Set[int]
     apps_added: Set[int]
     apps_kept: Set[int]
