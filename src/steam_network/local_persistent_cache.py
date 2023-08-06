@@ -1,6 +1,8 @@
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
+from datetime import datetime
+
 from .caches.cache_base import CacheBase
 from .caches.friends_cache import FriendsCache
 from .caches.games_cache import GamesCache
@@ -30,6 +32,7 @@ class LocalPersistentCache:
         self._modified = False  # set if anything in this cache updates. unset when the data is pushed to gog's internal cache. initially unset.
         self._username: Optional[str] = None
         self._confirmed_steam_id: Optional[int] = None
+        self._last_authenticated_timestamp: Optional[datetime] = None
         self._persistent_cache: Dict[str, Any] = cache
         self.package_cache = PackageCache()
         self.games_cache = GamesCache()

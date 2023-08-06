@@ -17,7 +17,7 @@ from galaxy.api.types import (Achievement, Authentication, Dlc, Game,
 from galaxy.api.consts import LicenseType, SubscriptionDiscovery
 
 from rsa import PublicKey
-from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
+
 
 from .local_persistent_cache import LocalPersistentCache
 from .mvc_classes import (AuthErrorCode, ModelAuthClientLoginResult,
@@ -70,10 +70,6 @@ class SteamNetworkModel:
     def server_cell_id(self):
         return self._server_cell_id
 
-    @property
-    def _unchecked_msg_handler(self):
-        return cast(ProtobufSocketHandler, self._msg_handler)
-
     def initialize(self, persistent_cache):
         self._local_persistent_cache = LocalPersistentCache(persistent_cache)
         self._run_task = asyncio.create_task(self.run())
@@ -83,113 +79,7 @@ class SteamNetworkModel:
         websocket_uri, websocket = await websocket_connection_list.connect_to_best_available(cell_id)
         return ProtobufSocketHandler(websocket_uri, websocket, queue, future_lookup)
 
-    async def run(self):
-        """ Create and run the asyncio tasks necessary to receive and process all socket calls.
 
-        This function runs until cancelled or an unrecoverable error is returned.
-        It runs in an infinite loop, but will only ever iterate if an uncaught error is received and we can recover from it.
-        """
-
-        process_task: Optional[Task[None]] = None
-        receive_task: Optional[Task[None]] = None
-        receive_process_queue: asyncio.Queue = asyncio.Queue()
-        future_lookup_dict: Dict[int, AwaitableResponse] = {}
-
-        while True:
-            if self._msg_handler is None:
-                receive_task = None
-
-                websocket_uri, websocket = await self._websocket_connection_list.connect_to_best_available(self._server_cell_id)
-                self._msg_handler = ProtobufSocketHandler(websocket_uri, websocket, receive_process_queue, future_lookup_dict)
-
-            if self._msg_processor is None:
-                process_task = None
-
-                self._msg_processor = ProtobufProcessor(receive_process_queue, future_lookup_dict, self._local_persistent_cache)
-
-            if process_task is None:
-                process_task = asyncio.create_task(self._msg_processor.run())
-
-            if receive_task is None:
-                receive_task = asyncio.create_task(self._msg_handler.run())
-
-            if not self._run_ready_event.is_set():
-                self._run_ready_event.set()
-
-            done, _ = await asyncio.wait([receive_task, process_task], return_when=asyncio.FIRST_COMPLETED)
-            if len(done) > 0:
-                self._run_ready_event.clear()
-
-            # if run task is done, it means we have a connection closed. that's the only reason it finishes.
-            if receive_task in done:
-                exception = receive_task.exception()
-                if isinstance(exception, ConnectionClosed):
-                    if (isinstance(exception, ConnectionClosedOK)):
-                        logger.debug("Expected WebSocket disconnection. Restarting if required.")
-                    else:
-                        logger.warning("WebSocket disconnected (%d: %s), reconnecting...", exception.code, exception.reason)
-
-                    # reset the socket handler.
-                    self._msg_handler = None
-                    receive_task = None
-                    # finish processing all existing messages and then return from the process task.
-                    # it is necessary to finish the processing so we know what messages have been sent that we will not get a response for.
-                    self._msg_processor.notify_no_more_messages()
-                    await process_task
-                    self._msg_processor = None
-                    process_task = None
-
-                elif exception is None:
-                    logger.exception("Code exited infinite receive loop but did not error. this should be impossible")
-                    raise UnknownBackendResponse()
-                elif not isinstance(exception, asyncio.CancelledError):
-                    logger.exception("Code exited infinite receive loop with an unexpected error. This should not be possible")
-                    raise UnknownBackendResponse()
-                else:
-                    logger.info("run task was cancelled. shutting down")
-                    self._msg_handler.close(True)
-                    process_task.cancel()
-                    await process_task
-                    self._local_persistent_cache.close()
-                    break
-            elif (process_task in done):
-                exception = process_task.exception()
-                if (exception is None):
-                    logger.exception("Code exited infinite cache process loop but did not error. this should be impossible")
-                    raise UnknownBackendResponse()
-                elif any([isinstance(exception, err) for err in (InvalidCredentials, AccessDenied, AuthenticationRequired)]):
-                    logger.debug("Lost credentials. Restarting the loop.")
-                elif any([isinstance(exception, err) for err in (BackendNotAvailable, BackendTimeout, BackendError)]):
-                    logger.warning(f"{repr(exception)}. Trying with different CM...")
-
-                    self._websocket_list.add_server_to_ignored(self._msg_handler.socket_uri)
-                elif isinstance(exception, NetworkError):
-                    # this is raised by utils.translate_error if we get a response saying the connection failed... but if that was the case, how would we be getting the response?
-                    # so this error should never be raised.
-                    logger.error(
-                        f"Failed to establish authenticated WebSocket connection: {repr(exception)}, retrying after %d seconds",
-                        RECONNECT_INTERVAL_SECONDS
-                    )
-                    await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
-                elif not isinstance(exception, asyncio.CancelledError):
-                    logger.exception("Code exited infinite cache process loop with an unexpected error. This should not be possible")
-                    raise exception
-                else:
-                    logger.info("cache task was cancelled. shutting down")
-                    self._local_persistent_cache.close()
-                    receive_task.cancel()
-                    await receive_task
-                    self._msg_handler.close(True)
-                    break
-            else:
-                pass
-
-            # if we are here, it means we have a recoverable error. all other errors will result in either raising an error or breaking out of the while loop.
-            # at this point, either the processor shut down, or both the handler and processor are shut down.
-            if self._msg_handler is None:
-                for val in future_lookup_dict.values():
-                    val.future.set_exception(MessageLostException())
-        logger.info("Shutting down model run task")
 
     async def tick(self):
         # check the run task to see if we're still active. Only occurs if it's cancelled or we hit an error we could not recover from.

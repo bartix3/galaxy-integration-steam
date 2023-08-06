@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from asyncio import Future, Task, get_running_loop
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from typing import Awaitable, Callable, Dict, Generic, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple, Type, TypeVar, Union, cast
+from websockets.typing import Data
 
 import betterproto
 
@@ -31,7 +33,8 @@ _ITERATOR_WIDTH = 20
 def generate_job_id(iterator: Iterator[int]) -> int:
     pass
 
-class OwnedTokenTuple(NamedTuple):
+@dataclass
+class OwnedTokenTuple():
     owns_package: bool
     access_token: int
 
@@ -82,9 +85,6 @@ class AwaitableResponse(ABC):
     @abstractmethod
     def get_future(self) -> Future:
         pass
-
-
-
 
 T = TypeVar("T", bound=betterproto.Message)
 class AwaitableJobNameResponse(AwaitableResponse, Generic[T]):
@@ -214,6 +214,9 @@ class ProtoResult(Generic[W]):  # noqa: E302
     def body(self):
         return self._body
 
+class MessageWithTimestamp(NamedTuple):
+    message: Data
+    receive_time: datetime
 
 class MessageLostException(Exception):
     pass

@@ -12,10 +12,10 @@ When parsing the login token call, if it is successful, you must call on_login_s
 
 #built-in modules:
 #classic imports
-import ipaddress
+
 import logging
 import socket as sock
-import struct
+
 #modern imports
 from asyncio import Future, Queue, Task, create_task, sleep
 from base64 import b64encode
@@ -72,8 +72,6 @@ from .steam_client_enumerations import EMsg, EResult
 from ..caches.cache_helpers import PackageInfo
 
 logger = logging.getLogger(__name__)
-LOG_SENSITIVE_DATA = False
-
 
 GET_APP_RICH_PRESENCE = "Community.GetAppRichPresenceLocalization#1"
 GET_LAST_PLAYED_TIMES = 'Player.ClientGetLastPlayedTimes#1'
@@ -91,9 +89,6 @@ class ProtobufSocketHandler:
 
      Since this class is designed to be as simple as possible, it will simply hand-off any unexpected messages, only parsing what it can.
     """
-    _PROTO_MASK = 0x80000000
-    _ACCOUNT_ID_MASK = 0x0110000100000000
-    _IP_OBFUSCATION_MASK = 0x606573A4
     _MSG_PROTOCOL_VERSION = 65580
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
@@ -110,7 +105,7 @@ class ProtobufSocketHandler:
 
 
     def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue: Queue, future_lookup: Dict[int, AwaitableResponse], box_id: int = 0, process_id: int = 0):
-        self._future_lookup: Dict[int, AwaitableResponse] = future_lookup
+
         self._socket_uri = socket_uri
         self._socket: WebSocketClientProtocol = socket
         self._queue: Queue = queue
@@ -347,13 +342,8 @@ class ProtobufSocketHandler:
         resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
         await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
 
-        try:
-            data = await resp_holder.get_future()
-            return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
-        except Exception as e:
-            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
-            self._future_lookup.pop(job_id)
-            raise
+        data = await resp_holder.get_future()
+        return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
 
     async def PICSProductInfo_from_apps(self, app_ids: Set[int]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
         logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
@@ -374,13 +364,8 @@ class ProtobufSocketHandler:
         resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
         await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
 
-        try:
-            data = await resp_holder.get_future()
-            return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
-        except Exception as e:
-            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
-            self._future_lookup.pop(job_id)
-            raise
+        data = await resp_holder.get_future()
+        return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
 
     async def GetAppRichPresenceLocalization(self, app_id: int, language: str = "english") -> ProtoResult[CCommunity_GetAppRichPresenceLocalization_Response]:
         logger.info(f"Sending call for rich presence localization with {app_id}, {language}")
@@ -423,108 +408,3 @@ class ProtobufSocketHandler:
             await self.LogOff_no_wait()
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-
-    # header and message generates are always called back to back. feel free to merge thes into one.
-    def _generate_header(self, job_id: Optional[int] = None, job_name: Optional[str] = None, override_steam_id: Optional[int] = None) -> CMsgProtoBufHeader:
-        """Generate the protobuf header that the send functions require.
-
-        """
-        proto_header = CMsgProtoBufHeader()
-
-        if job_id is not None:
-            proto_header.jobid_source = job_id
-
-        if override_steam_id is not None:
-            proto_header.steamid = override_steam_id
-        elif self.confirmed_steam_id is not None:
-            proto_header.steamid = self.confirmed_steam_id
-        else:
-            proto_header.steamid = 0 + self._ACCOUNT_ID_MASK
-        if self._session_id is not None:
-            proto_header.client_sessionid = self._session_id
-        if job_name is not None:
-            proto_header.target_job_name = job_name
-
-        return proto_header
-
-    def _generate_message(self, header: CMsgProtoBufHeader, msg: Message, emsg: EMsg) -> bytes:
-        head = bytes(header)
-        body = bytes(msg)
-        # provide the information about the message being sent before the header and body.
-        # Magic string decoded: < = little endian. 2I = 2 x unsigned integer.
-        # emsg | proto_mask is the first UInt (describes what we are sending), length of header is the second UInt.
-        msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(head))
-        return msg_info + head + body
-
-    async def _send_no_wait(self, msg: Message, emsg: EMsg, job_id: int, job_name: Optional[str] = None):
-        """Send a message along the websocket. Do not expect a response.
-
-        If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
-        """
-        header = self._generate_header(job_id, job_name)
-        data = self._generate_message(header, msg, emsg)
-
-        if LOG_SENSITIVE_DATA:
-            logger.info("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
-        else:
-            logger.info("[Out] %s (%dB)", repr(emsg), len(data))
-        await self._socket.send(data)
-
-    async def _send_common(self, header: CMsgProtoBufHeader, msg: Message, request_emsg: EMsg, response_holder: AwaitableResponse, unique_identifier: int, override_steam_id: Optional[int] = None):
-        """Perform the common send and receive logic.
-        """
-        try:
-            self._future_lookup[unique_identifier] = response_holder
-            
-            data = self._generate_message(header, msg, request_emsg)
-
-            if LOG_SENSITIVE_DATA:
-                logger.info("[Out] %s (%dB), params:%s\n", repr(request_emsg), len(data), repr(msg))
-            else:
-                logger.info("[Out] %s (%dB)", repr(request_emsg), len(data))
-            await self._socket.send(data)
-        except Exception as e:
-            logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
-            response_holder.get_future().cancel()
-            self._future_lookup.pop(unique_identifier)
-            raise
-
-    U = TypeVar("U", bound= Message)
-    async def _send_recv_service_message(self, msg: Message, response_type: Type[U], send_recv_name: str) -> Tuple[CMsgProtoBufHeader, U]:
-        emsg = EMsg.ServiceMethodCallFromClientNonAuthed if self.confirmed_steam_id is None else EMsg.ServiceMethodCallFromClient
-        job_id = self._get_job_id()
-        header = self._generate_header(job_id, send_recv_name)
-        resp_holder = AwaitableJobNameResponse.create_default(response_type, send_recv_name)
-
-        await self._send_common(header, msg, emsg, resp_holder, job_id)
-        try:
-            return await resp_holder.get_future()
-        except Exception as e:
-            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
-            self._future_lookup.pop(job_id)
-            raise
-
-    V = TypeVar("V", bound= Message)
-    async def _send_recv_client_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
-
-        header = self._generate_header(override_steam_id=override_steam_id)
-        unique_identifier = expected_return_format.value * -1
-        resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
-        await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
-
-        try:
-            return await resp_holder.get_future()
-        except Exception as e:
-            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
-            self._future_lookup.pop(unique_identifier)
-            raise
-
-    # old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow.
-    async def _get_obfuscated_private_ip(self) -> int:
-        logger.info('Websocket state is: %s' % self._socket.state.name)
-        await self._socket.ensure_open()
-        host, port = self._socket.local_address
-        ip = int(ipaddress.IPv4Address(host))
-        obfuscated_ip = ip ^ self._IP_OBFUSCATION_MASK
-        logger.debug(f"Local obfuscated IP: {obfuscated_ip}")
-        return obfuscated_ip
