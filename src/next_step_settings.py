@@ -1,7 +1,8 @@
-from typing import NamedTuple, Union, Dict
+from dataclasses import dataclass
+from typing import Union, Dict
 
-
-class NextStepSettings(NamedTuple):
+@dataclass
+class NextStepSettings:
     window_title: str
     window_width: int
     window_height : int
