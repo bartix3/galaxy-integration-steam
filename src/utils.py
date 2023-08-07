@@ -14,7 +14,7 @@ from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
 
 from typing import Optional, Generic, List, TypeVar, Tuple, cast
 
-from .protocol.steam_client_enumerations import EOSType, EResult
+from .steam_client.steam_client_enumerations import EOSType, EResult
 import logging
 
 logger = logging.getLogger(__name__)

@@ -1,176 +1,410 @@
-""" nonstandard_message_parser.py
+""" protobuf_socket_handler.py
 
-Provides the "parsing" aspect of the protobuf messages that we do not otherwise handle. 
-These can be messages that are unsolicited (sent by steam servers), or messages that come piecemeal that we cannot normally handle.
+Contains the run look for socket receive tasks. Is responsible for converting data into a message, sending it, then awaiting and returning the result.
 
-On Multis/ MultiHandler:
-As far as we can tell all messages are packed in multis, however a multi does not contain multiple messages unless they are ready at the same time. 
-While this usually means knowing when a multi ends is pointless, there are occasions where it is known that steam will pack a bunch of messages at once.
-For instances like this, metadata about the parent multi, including an event that fires when all members have been processed, is passed to the message processing calls.
-Whether an individual call uses it is up to implementation. 
+Migration Notes:
+This essentially replaces protobuf client. Ideally, the code originally from there that is not handled here, and their related functions in protocol client would be rolled into the websocket client (and renamed to steam_network_model), but for now, if you can drop this in as a replacement for protobuf client that's a good start.
 
-On Errors:
-With standard calls, which originate with a call from GOG Client, we can let GOG handle them.
-However, for these calls, we must handle them internally. It is highly recommended you handle any errors any external module calls may raise.
+Note that all unsoliticed messages are not implemented because there is no cache to send them to. So i commented out the code here. you will need to paste all the unsolicited calls and their related functions in this class for now. It's not ideal but it'll work for now.
 
-There are the exceptions we currently handle: 
-
-galaxy.api.errors.AuthenticationRequired 
-    - occurs when a message eresult suggests we lost authentication
-    - there is a field in the persistent cache that says the last time we obtained authentication. 
-        * If this field is None, it is known that we've lost authentication. Do not throw if we have already lost authentication.
-        * If this field is later than when a message was received, that message is outdated. do noth throw here. 
-        * otherwise, throw this exception. In all cases, it may be a good idea to log that we lost auth, but also note if we already lost/regained it.
-
-galaxy.api.errors.BackendNotAvailable
-    - Occurs when we get an unsolicited ClientLoggedOff response with the EResult TryAnotherCM.
-    - Results in all awaiting messages getting sent a MessageLostException.
-    - No other calls should use this error.
-
-
-Errors that are not the above will be treated as unrecoverable and crash the program as gracefully as possible.
-For situations where something does error, please use your best judgement as to whether or not it is recoverable.
-For example: if a single friend's persona data is invalid, you can simply skip that user and recover. For something like the licenseList failing, that's obviously not recoverable. You should always log the stack trace and any relevant data so future users can fix it, but recover if at all possible.
+When parsing the login token call, if it is successful, you must call on_login_successful here so the heartbeat starts.
 """
 
-import asyncio
-import datetime
+#built-in modules:
+#classic imports
+
 import logging
+import socket as sock
 
+#modern imports
+from asyncio import Future, Queue, Task, create_task, sleep
+from base64 import b64encode
+from datetime import datetime, timedelta, timezone
+from itertools import count
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Type, TypeVar
+#package modules:
 from betterproto import Message
-from gzip import decompress
-from typing import Dict, Optional, List, Set, Tuple, cast
-from websockets.typing import Data
-
-from ..local_persistent_cache import LocalPersistentCache
-from .message_helpers import AwaitableResponse, MultiHandler, OwnedTokenTuple
+from websockets.client import WebSocketClientProtocol
+#local modules
+from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleResponse, AwaitableEMessageResponse, AwaitableJobNameResponse, MessageLostException, ProtoResult
+from .messages.service_cloudconfigstore import (
+    CCloudConfigStore_Download_Request, CCloudConfigStore_Download_Response,
+    CCloudConfigStore_NamespaceVersion)
+from .messages.steammessages_auth import (
+    CAuthentication_BeginAuthSessionViaCredentials_Request,
+    CAuthentication_BeginAuthSessionViaCredentials_Response,
+    CAuthentication_GetPasswordRSAPublicKey_Request,
+    CAuthentication_GetPasswordRSAPublicKey_Response,
+    CAuthentication_PollAuthSessionStatus_Request,
+    CAuthentication_PollAuthSessionStatus_Response,
+    CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request,
+    CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response,
+    EAuthSessionGuardType, EAuthTokenPlatformType, ESessionPersistence)
 from .messages.steammessages_base import CMsgMulti, CMsgProtoBufHeader
-from .messages.steammessages_clientserver import CMsgClientLicenseList
-
+from .messages.steammessages_chat import \
+    CChat_RequestFriendPersonaStates_Request
+from .messages.steammessages_clientserver import (CMsgClientLicenseList,
+                                                  CMsgClientLicenseListLicense)
+from .messages.steammessages_clientserver_2 import \
+    CMsgClientUpdateMachineAuthResponse
+from .messages.steammessages_clientserver_appinfo import (
+    CMsgClientPICSProductInfoRequest, CMsgClientPICSProductInfoRequestAppInfo,
+    CMsgClientPICSProductInfoRequestPackageInfo,
+    CMsgClientPICSProductInfoResponse,
+    CMsgClientPICSProductInfoResponseAppInfo,
+    CMsgClientPICSProductInfoResponsePackageInfo)
+from .messages.steammessages_clientserver_friends import (
+    CMsgClientChangeStatus, CMsgClientFriendsList, CMsgClientPersonaState,
+    CMsgClientPlayerNicknameList, CMsgClientRequestFriendData)
+from .messages.steammessages_clientserver_login import (
+    CMsgClientAccountInfo, CMsgClientHeartBeat, CMsgClientHello,
+    CMsgClientLoggedOff, CMsgClientLogOff, CMsgClientLogon,
+    CMsgClientLogonResponse)
+from .messages.steammessages_clientserver_userstats import (
+    CMsgClientGetUserStats, CMsgClientGetUserStatsResponse)
+from .messages.steammessages_player import (
+    CPlayer_GetLastPlayedTimes_Request, CPlayer_GetLastPlayedTimes_Response)
+from .messages.steammessages_webui_friends import (
+    CCommunity_GetAppRichPresenceLocalization_Request,
+    CCommunity_GetAppRichPresenceLocalization_Response)
 from .steam_client_enumerations import EMsg, EResult
-from ..utils import GenericEvent, translate_error
 
+from ..caches.cache_helpers import PackageInfo
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-DateTime = datetime.datetime
+GET_APP_RICH_PRESENCE = "Community.GetAppRichPresenceLocalization#1"
+GET_LAST_PLAYED_TIMES = 'Player.ClientGetLastPlayedTimes#1'
+CLOUD_CONFIG_DOWNLOAD = 'CloudConfigStore.Download#1'
+REQUEST_FRIEND_PERSONA_STATES = "Chat.RequestFriendPersonaStates#1"
 
-class NonstandardMessageHandler():
-    """ Processes the results from the websocket to their protobuf format and then implements or calls a function that will perform further handling of the data.
+GET_RSA_KEY = "Authentication.GetPasswordRSAPublicKey#1"
+LOGIN_CREDENTIALS = "Authentication.BeginAuthSessionViaCredentials#1"
+UPDATE_TWO_FACTOR = "Authentication.UpdateAuthSessionWithSteamGuardCode#1"
+CHECK_AUTHENTICATION_STATUS = "Authentication.PollAuthSessionStatus#1"
 
-    When creating new things to handle in this class, please make sure to check the rules defined in this file so you don't cause unexpected behavior.
+
+class ProtobufSocketHandler:
+    """ Wraps a websocket with all the information we need to successfully send and receive messages to Steam's servers.
+
+     Since this class is designed to be as simple as possible, it will simply hand-off any unexpected messages, only parsing what it can.
     """
+    _MSG_PROTOCOL_VERSION = 65580
+    _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
-    _RECEIVE_DATA_TIMEOUT_SECONDS = 5
-    _PROTO_MASK = 0x80000000
-    _ACCOUNT_ID_MASK = 0x0110000100000000
-
-    def __init__(self, local_cache: LocalPersistentCache):
-        self._local_cache : LocalPersistentCache = local_cache
-        #data needed to shut down this instance in the event of a recoverable error on the receiving end.
-        #message processing is expected to be standalone but may require additional info from other messages first. These need to be wrapped in 
-        self._task_list: List[asyncio.Task]
-        self.gathering_tasks_event: asyncio.Event = asyncio.Event()
-        #client log in
-        #steam id
-        self._steam_id_ready_event: asyncio.Event
-        self._confirmed_steam_id : Optional[int] = None
-        #license list
-        self._processing_licenses : bool = False
-        self._package_to_owned_access_lookup : Dict[int, OwnedTokenTuple] = {}
-        #friend list
-        self._processing_friend_ids: bool = False
-        self._friend_id_list: List[int] = []
-
-
-    def has_steam_id(self) -> bool:
-        return self._steam_id_ready_event.is_set()
-
-
-
-
-    async def handle_unsolicited_message(self, emsg: EMsg, header: CMsgProtoBufHeader, body: bytes, timestamp: DateTime, parent_multi: Optional[MultiHandler]):
-        if emsg == EMsg.ClientLoggedOff:
-                self._process_client_logged_off(EResult(header.eresult))
-        elif emsg == EMsg.ClientLicenseList:
-            await self._process_license_list_message(header, body, parent_multi)
-        else:
-            logger.warning("Received an unsolicited message")
-            logger.warning("Ignored message %d", emsg)
-        await asyncio.sleep(0.01)
-
-    def _process_client_logged_off(self, result: EResult):
-        #raise an error. Our parent task (the run loop in model) will catch this, shut down the socket, reconnected to steam's servers, and restart these tasks if it is able to do so.
-        raise translate_error(result)
-
-    #region License List
-    async def _process_license_list_message(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
-        """ process the license list message. note that we need the confirmed steam id to properly process this message so we need to wait until it's confirmed.
-
-        If it is not yet confirmed, create a task and defer execution until that id is confirmed. if it is, then just call the coroutine immediately. 
-        """
-        data = CMsgClientLicenseList().parse(body)
-        self._local_cache.prepare_for_package_data()
-        #check if we have the steam id. if we do, we don't need to wrap it in a task, it won't deadlock. If we don't, make sure to create a task and add it to proper place for cleanup.
-        if self.has_steam_id():
-            await self._check_license_list_against_steam_id(header, data, parent_multi)
-        else:
-            task = asyncio.create_task(self._check_license_list_against_steam_id(header, data, parent_multi))
-            if (parent_multi is not None):
-                parent_multi.post_multi_complete_gather_task_list.append(task)
-            else:
-                self._task_list.append(task)
+    _DATETIME_JAN_1_2005 = datetime(2005, 1, 1, tzinfo=timezone.utc)
     
-    async def _check_license_list_against_steam_id(self, header : CMsgProtoBufHeader, data: CMsgClientLicenseList, parent_multi: Optional[MultiHandler]):
-        """ Process a license list. Defer execution until the steam id is known, as we need it to determine if the package is owned or if it's a subscription.
+    _BOX_ID_MASK = 0x3FF
+    _PROCESS_ID_MASK = 0xf
+    _DATETIME_MASK = 0x3FFFFFFF
+    _ITERATOR_MAX = 0x100000
 
-        This call will deadlock the run loop if called directly from it (or its calls like process_message), unless the steam_id is already known. 
-        Therefore, if the steam id is not known before calling this, it must be done in a separate task. 
+    _PROCESS_ID_WIDTH = 4
+    _DATETIME_WIDTH = 30
+    _ITERATOR_WIDTH = 20
 
-        There is anecdotal evidence that above 12k licenses, the response is split across multiple messages. It's assumed that these will all be part of the client login multi.
-        Therefore, we need to wait for the parent multi to complete before going to the cache. Therefore, this function starts a task to run at parent multi completion if one exists.
-        If no parent multi exists, it runs this task immediately instead. If this task is already started, does not spawn an additional task.
-        """
-        await self._steam_id_ready_event.wait()
-        steam_id = cast(int, self._confirmed_steam_id)
-        owner_id = int(steam_id - self._ACCOUNT_ID_MASK)
 
-        #Normally we attach this to the parent multi and wait for that to finish before checking the licenses. If no such multi exists, we have to do it all at once. 
-        #this flag helps catch that edge case. 
-        complete_processing_immediately: bool = parent_multi is None
+    def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue: Queue, future_lookup: Dict[int, AwaitableResponse], box_id: int = 0, process_id: int = 0):
 
-        #try to start the task that will update the cache that all licenses have been processed from the servers. Will not do so if there is no parent multi to attach to or if one already exists.
-        if not complete_processing_immediately and not self._processing_licenses:
-            task = asyncio.create_task(self._all_known_licenses_processed_update_cache(parent_multi))
-            cast(MultiHandler, parent_multi).post_multi_complete_gather_task_list.append(task)
+        self._socket_uri = socket_uri
+        self._socket: WebSocketClientProtocol = socket
+        self._queue: Queue = queue
+        # this is actually clever. A lazy iterator that increments every time you call next.
+        self._job_id_iterator: Iterator[int] = count(1)
+        # guaranteed to not be null unless the
+        self._session_id: Optional[int] = None
+        self.confirmed_steam_id: Optional[int] = None
+        self._heartbeat_task: Optional[Task[None]] = None
+        self._job_id_high_bits: int = ProtobufSocketHandler.generate_job_id_high_bits(box_id, process_id)
         
-        #set the flag so we know not to create additional task(s) for the license list.
-        self._processing_licenses = True
 
-        for license_data in data.licenses:
-            owns_package = owner_id == license_data.owner_id
-            access_token = license_data.access_token
-            package_id = license_data.package_id
-            #may have access to the package from multiple sources. If one form of access is ownership, it overrides all the others. If not, only add it if it's not already there.
-            if owns_package or package_id not in self._package_to_owned_access_lookup:
-                self._package_to_owned_access_lookup[package_id] = OwnedTokenTuple(owns_package, access_token)
+    @classmethod
+    def generate_job_id_high_bits(cls, box_id: int, process_id: int):
+        value: int = 0
+        #when we shift, we do so in preparation of the next block, so our shift width is that of the next part of the job id. 
+        #handle box id.
+        if box_id != 0:
+            box_id &= cls._BOX_ID_MASK # cap at 10 bits
+            value = box_id << cls._PROCESS_ID_WIDTH
+        #handle process id
+        if process_id != 0:
+            process_id &= cls._PROCESS_ID_MASK # cap at 4 bits.
+            value = (value + process_id) << cls._DATETIME_WIDTH 
+        #handle date time
+        utc_now = datetime.now(timezone.utc)
+        delta_time = int((utc_now - cls._DATETIME_JAN_1_2005).total_seconds()) # Total seconds since jan 1 2005 as an integer. Used by job id, but idk why that is the arbitrary date we use.
+        # Limit to 30 bits because we have a fixed 64-bit integer for job id and that's how many characters are allotted. wont be relevant until ~2060 +/- 5 years (didn't do the math)
+        relative_start_time : int = delta_time & cls._DATETIME_MASK 
 
-        # if we hit the edge case where we have no parent multi, complete the code immediately. 
-        if complete_processing_immediately:
-            await self._all_known_licenses_processed_update_cache(None)
-    
-    async def _all_known_licenses_processed_update_cache(self, client_login_multi: Optional[MultiHandler]):
-        if client_login_multi is not None:
-            _ = client_login_multi.on_multi_complete_event.wait()
+        value = (value + relative_start_time) << cls._ITERATOR_WIDTH # relative start time is already capped. the value is constant so we can afford to make it compile-time safe.
 
-        self._local_cache.compare_packages(self._package_to_owned_access_lookup)
-        self._processing_licenses = False
-        self._package_to_owned_access_lookup.clear()
-    #endregion License List
-    #region Friend Data
-    async def _process_friend_list_message(self, header : CMsgProtoBufHeader, body: bytes, parent_multi: Optional[MultiHandler]):
-        """ Process the friends list message. Like license list, this can apparently be a multi-parter. Unlike license list, we are guarenteed to know when a new list starts. 
+    def _get_job_id(self) -> int:
+        value = self._job_id_high_bits
+        iteration = next(self._job_id_iterator)
+        if iteration == self._ITERATOR_MAX:
+            self._job_id_iterator = count(1)
+            iteration = 0
+        value += iteration
+
+        return value
+
+    @property
+    def socket_uri(self):
+        return self._socket_uri
+
+    async def run(self):
+        """Run the websocket receive loop asynchronously.
+
+        This is only responsible for receiving a packet and extracting the message from it.
+        it then hands off that package to another task (either the caller or the cache, depending on who initiated it)
+        This should never error, except when the socket shuts down or is explicitely cancelled.
         """
-        pass
-    #endregion
+        # this will error out with connection closed, either connection closed OK or connection closed error.
+        # it should never throw otherwise and will loop until the plugin closes (which will cause a task cancelled exception, but that's ok).
+        async for message in self._socket:
+            await self._process_packet(message)
+
+    async def SendHello(self):
+        message = CMsgClientHello(self._MSG_PROTOCOL_VERSION)
+        logger.info("Sending hello")
+        await self._send_no_wait(message, EMsg.ClientHello)
+
+    # Standard Request/Response style messages. They aren't synchronous by nature of websocket communication, but we can write our code to closely mimic that behavior.
+
+    # get the rsa public key for the provided user
+    async def GetPasswordRSAPublicKey(self, username: str) -> ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response]:
+        logger.info("Sending rsa key request for user")
+        msg = CAuthentication_GetPasswordRSAPublicKey_Request(username)
+        try:
+            header, resp = await self._send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
+            logger.info("obtained rsa key for user")
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+
+    # start the login process with credentials
+    async def BeginAuthSessionViaCredentials(self, account_name: str, enciphered_password: bytes, timestamp: int, os_value: int, language: Optional[str] = None) -> ProtoResult[CAuthentication_BeginAuthSessionViaCredentials_Response]:
+        friendly_name: str = sock.gethostname() + " (GOG Galaxy)"
+
+        message = CAuthentication_BeginAuthSessionViaCredentials_Request()
+
+        message.account_name = account_name
+        # protobuf definition uses string, so we need this to be a string. but we can't parse the regular text as
+        # a string because it's enciphered and contains illegal characters. b64 fixes this.
+        # Then we make it a utf-8 string, and better proto then makes it bytes again when it's packed alongside all other message fields and sent along the websocket.
+        # inelegant but the price you pay for proper type checking.
+        message.encrypted_password = str(b64encode(enciphered_password), "utf-8")
+        message.website_id = "Client"
+        message.device_friendly_name = friendly_name
+        message.encryption_timestamp = timestamp
+        message.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
+        message.persistence = ESessionPersistence.k_ESessionPersistence_Persistent
+        #TODO: Find the language enum steam uses and add it to client enumerations.
+        #if language:
+        #    message.language = language
+
+        message.device_details.device_friendly_name = friendly_name
+        message.device_details.os_type = os_value if os_value >= 0 else 0
+        message.device_details.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
+
+        logger.info("Sending log on message using credentials in new authorization workflow")
+        try:
+            header, resp = await self._send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
+            logger.info("Received log on credentials response")
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+
+    # update login with steam guard code
+    async def UpdateAuthSessionWithSteamGuardCode(self, client_id: int, steam_id: int, code: str, code_type: EAuthSessionGuardType) -> ProtoResult[CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response]:
+        logger.info("Sending steam guard update data request")
+        msg = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request(client_id, steam_id, code, code_type)
+        try:
+            header, resp = await self._send_recv_service_message(msg, CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response, UPDATE_TWO_FACTOR)
+            logger.info("Received steam guard update response.")
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+
+    # determine if we are logged on
+    async def PollAuthSessionStatus(self, client_id: int, request_id: bytes) -> ProtoResult[CAuthentication_PollAuthSessionStatus_Response]:
+        message = CAuthentication_PollAuthSessionStatus_Request()
+        message.client_id = client_id
+        message.request_id = request_id
+        logger.info("Requesting update on steam guard status")
+        try:
+            # we leave the token revoke unset, i'm not sure how the ctor works here so i'm just doing it this way.
+            header, resp = await self._send_recv_service_message(message, CAuthentication_PollAuthSessionStatus_Response, CHECK_AUTHENTICATION_STATUS)
+            logger.info("Received update on steam guard status response")
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+
+    # log on with token
+    async def TokenLogOn(self, account_name: str, steam_id: int, access_token: str, cell_id: int, machine_id: bytes, os_value: int, language: Optional[str] = None) -> ProtoResult[CMsgClientLogonResponse]:
+
+        override_steam_id = steam_id if self.confirmed_steam_id is None else None
+
+        message = CMsgClientLogon()
+        message.client_supplied_steam_id = float(steam_id)
+        message.protocol_version = self._MSG_PROTOCOL_VERSION
+        message.client_package_version = self._MSG_CLIENT_PACKAGE_VERSION
+        message.cell_id = cell_id
+        message.client_language = "english" if language is None or not language else language
+        message.client_os_type = os_value if os_value >= 0 else 0
+        message.obfuscated_private_ip.v4 = await self._get_obfuscated_private_ip()
+        message.qos_level = 3
+        message.machine_id = machine_id
+        message.account_name = account_name
+        # message.password = ""
+        message.should_remember_password = True
+        message.eresult_sentryfile = EResult.FileNotFound
+        message.machine_name = sock.gethostname()
+        message.access_token = access_token
+        logger.info("Sending log on message using access token")
+
+        try:
+            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogon, EMsg.ClientLogOnResponse, CMsgClientLogonResponse, override_steam_id)
+            logger.info("Received log on message for access token response")
+            return ProtoResult(header.eresult, header.error_message, resp)
+
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+
+    def on_TokenLogOn_success(self, confirmed_steam_id: int, heartbeat_interval: float):
+        self.confirmed_steam_id = confirmed_steam_id
+        self._heartbeat_task = create_task(self._heartbeat(heartbeat_interval))
+
+    async def _heartbeat(self, interval: float):
+        # these messages will be sent over and over, no need to recreate the data each time. So we're building a bytes object and sending that each time.
+        message = CMsgClientHeartBeat(False)
+        header = self._generate_header()  # blank header is ideal as we don't increase our iterator needlessly.
+        data = self._generate_message(header, message, EMsg.ClientHeartBeat)
+
+        while True:
+            await self._socket.send(data)
+            await sleep(interval)
+
+    # log off and read the response. We don't actually care about the response so this is not used atm.
+    async def LogOff(self) -> ProtoResult[CMsgClientLoggedOff]:
+        message = CMsgClientLogOff()
+        logger.info("Sending log off message")
+        try:
+            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except MessageLostException:
+            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
+
+    # log off, but don't wait for a response. Because we shut down the socket immediately after the log off, this is what we use.
+    async def LogOff_no_wait(self):
+        message = CMsgClientLogOff()
+        logger.info("Sending log off message")
+        try:
+            await self._send_no_wait(message, EMsg.ClientLogOff, next(self._job_id_iterator))
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+
+    # forget this authorization. Used when the user hits "disconnect" All calls after this will fail. Should be called immediately before LogOff.
+    # as of this writing there is no hook for "disconnect" so this isn't used.
+    # async def RevokeRefreshToken(self) -> ProtoResult[CAuthentication_RefreshToken_Revoke_Response]:
+    #    pass
+
+    # get user stats
+    # USED BY ACHIEVEMENT IMPORT
+    async def GetUserStats(self, game_id: int) -> ProtoResult[CMsgClientGetUserStatsResponse]:
+        message = CMsgClientGetUserStats(game_id=game_id)
+        logger.info("Retrieving user stats for game %d", game_id)
+        try:
+            header, response = await self._send_recv_client_message(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, CMsgClientGetUserStatsResponse)
+            logger.info("Retrieved user stats for game %d", game_id)
+            return ProtoResult(header.eresult, header.error_message, response)
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
+
+    @staticmethod
+    def _PICS_done(product_info : CMsgClientPICSProductInfoResponse) -> bool:
+        return not product_info.response_pending
+
+    # get user license information
+    async def PICSProductInfo_from_packages(self, package_data: Set[PackageInfo]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
+        logger.info("Sending call %s with %d package_ids", EMsg.ClientPICSProductInfoRequest.name, len(package_data))
+        message = CMsgClientPICSProductInfoRequest()
+
+        message.packages = [CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token) for x in package_data]
+
+        job_id = self._get_job_id()
+        send_header = self._generate_header(job_id)
+        send_emsg = EMsg.ClientPICSProductInfoRequest
+        resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
+        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
+
+        data = await resp_holder.get_future()
+        return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
+
+    async def PICSProductInfo_from_apps(self, app_ids: Set[int]) -> List[ProtoResult[CMsgClientPICSProductInfoResponse]]:
+        logger.info("Sending call %s with %d app_ids", repr(EMsg.ClientPICSProductInfoRequest), len(app_ids))
+        message = CMsgClientPICSProductInfoRequest()
+
+        if message.apps is None:
+            message.apps = []
+
+        #not sure if i can just provide one argument to this or if that will fail so i broke apart the list comprehension to be safe. 
+        for app_id in app_ids:
+            app = CMsgClientPICSProductInfoRequestAppInfo()
+            app.appid = app_id
+            message.apps.append(app)
+        
+        job_id = self._get_job_id()
+        send_header = self._generate_header(job_id)
+        send_emsg = EMsg.ClientPICSProductInfoRequest
+        resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
+        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
+
+        data = await resp_holder.get_future()
+        return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
+
+    async def GetAppRichPresenceLocalization(self, app_id: int, language: str = "english") -> ProtoResult[CCommunity_GetAppRichPresenceLocalization_Response]:
+        logger.info(f"Sending call for rich presence localization with {app_id}, {language}")
+        message = CCommunity_GetAppRichPresenceLocalization_Request(app_id, language)
+
+        try:
+            header, resp = await self._send_recv_service_message(message, CCommunity_GetAppRichPresenceLocalization_Response, GET_APP_RICH_PRESENCE)
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
+
+    async def ConfigStore_Download(self) -> ProtoResult[CCloudConfigStore_Download_Response]:
+        logger.debug("sending ConfigStore download request")
+        message = CCloudConfigStore_Download_Request()
+        message_inside = CCloudConfigStore_NamespaceVersion()
+        message_inside.enamespace = 1
+        message.versions.append(message_inside)
+
+        try:
+            header, resp = await self._send_recv_service_message(message, CCloudConfigStore_Download_Response, CLOUD_CONFIG_DOWNLOAD)
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
+
+    async def GetLastPlayedTimes(self) -> ProtoResult[CPlayer_GetLastPlayedTimes_Response]:
+        logger.info("Importing game times")
+        message = CPlayer_GetLastPlayedTimes_Request(0)
+
+        try:
+            header, resp = await self._send_recv_service_message(message, CPlayer_GetLastPlayedTimes_Response, GET_LAST_PLAYED_TIMES)
+            return ProtoResult(header.eresult, header.error_message, resp)
+        except Exception as e:
+            logger.error(f"Unable to send logoff message {repr(e)}")
+            raise
+
+    async def close(self, send_log_off: bool):
+        if send_log_off:
+            await self.LogOff_no_wait()
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()

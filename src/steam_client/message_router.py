@@ -24,7 +24,7 @@ from websockets.typing import Data
 from .messages.steammessages_base import CMsgProtoBufHeader
 from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleResponse, AwaitableEMessageResponse, AwaitableJobNameResponse, MessageWithTimestamp, MultiHandler
 from .steam_client_enumerations import EMsg
-from .nonstandard_message_parser import NonstandardMessageHandler
+from .unsolicited_message_handler import NonstandardMessageHandler
 from ..local_persistent_cache import LocalPersistentCache
 from .websocket_list import WebSocketList
 

@@ -9,7 +9,7 @@ from galaxy.api.types import NextStep
 from galaxy.api.errors import UnknownBackendResponse
 from rsa import PublicKey
 
-from .protocol.messages.steammessages_auth import CAuthentication_AllowedConfirmation
+from .steam_client.messages.steammessages_auth import CAuthentication_AllowedConfirmation
 from .mvc_classes import ModelAuthError, AuthErrorCode, WebpageView
 from .utils import get_traceback
 

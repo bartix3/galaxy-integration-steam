@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Sequence, Set, cast
 
 from .cache_base import CacheBase
 from .cache_helpers import PackageAppUpdateEvent, PackageDataUpdateEvent, PackageInfo
-from ..protocol.message_helpers import OwnedTokenTuple
+from ..steam_client.message_helpers import OwnedTokenTuple
 from ..utils import GenericEvent
 
 logger = logging.getLogger(__name__)

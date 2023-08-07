@@ -11,7 +11,7 @@ from typing import List, NamedTuple, Optional
 
 from rsa import PublicKey
 
-from .protocol.messages.steammessages_auth import (
+from .steam_client.messages.steammessages_auth import (
     CAuthentication_AllowedConfirmation, EAuthSessionGuardType)
 
 

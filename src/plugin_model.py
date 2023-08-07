@@ -24,18 +24,17 @@ from .mvc_classes import (AuthErrorCode, ModelAuthClientLoginResult,
                           ModelAuthCredentialData, ModelAuthError,
                           ModelAuthPollError, ModelAuthPollResult,
                           SteamPublicKey)
-from .protocol.message_helpers import (AwaitableResponse, MessageLostException,
+from .steam_client.message_helpers import (AwaitableResponse, MessageLostException,
                                        ProtoResult)
-from .protocol.messages.service_cloudconfigstore import \
+from .steam_client.messages.service_cloudconfigstore import \
     CCloudConfigStore_Download_Response
-from .protocol.messages.steammessages_auth import (
+from .steam_client.messages.steammessages_auth import (
     CAuthentication_BeginAuthSessionViaCredentials_Response,
     CAuthentication_GetPasswordRSAPublicKey_Response, EAuthSessionGuardType)
-from .protocol.messages.steammessages_clientserver_appinfo import CMsgClientPICSProductInfoResponse, CMsgClientPICSProductInfoResponseAppInfo, CMsgClientPICSProductInfoResponsePackageInfo
-from .protocol.protobuf_parser import ProtobufProcessor
-from .protocol.protobuf_socket_handler import ProtobufSocketHandler
+from .steam_client.messages.steammessages_clientserver_appinfo import CMsgClientPICSProductInfoResponse, CMsgClientPICSProductInfoResponseAppInfo, CMsgClientPICSProductInfoResponsePackageInfo
+from .steam_client.message_router import MessageRouter
+from .steam_client.steam_model_messages import ProtobufSocketHandler
 from .utils import EResult, get_os, translate_error
-from .websocket_list import WebSocketList
 from .caches.cache_helpers import GameDummy, PackageInfo, SubscriptionPlusDLC, PackageAppUpdateEvent
 
 logger = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 RECONNECT_INTERVAL_SECONDS = 20
 
 
-class SteamNetworkModel:
+class PluginModel:
     """ Class that deals with the "model" aspect of our integration with Steam Network.
 
     Since our "model" is external, the majority of this class is sending and receiving messages along a websocket. The exact calls sent to and received from steam are handled by a helper. This class simply calls the helper's various functions and parses the results. These results are then returned to the Controller
@@ -55,14 +54,8 @@ class SteamNetworkModel:
 
     def __init__(self):
 
-        self._websocket_connection_list: WebSocketList = WebSocketList()
-        self._msg_handler: Optional[ProtobufSocketHandler] = None
-        self._msg_processor: Optional[ProtobufProcessor] = None
         self._local_persistent_cache: Optional[LocalPersistentCache] = None
         self._server_cell_id = 0
-        self._run_task: Optional[asyncio.Task] = None
-        self._run_ready_event: asyncio.Event = asyncio.Event()
-        self._game_task: Optional[asyncio.Task] = None
         # normally, we'd just initialize the parser and persistent cache in handshake complete (where it makes sense), but the handshake complete call from Galaxy Client is not async.
         # so start the initialization as a background task, and the first time we need it and can await it (i.e. when we do auth), await the task.
 

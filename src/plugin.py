@@ -35,18 +35,18 @@ from rsa import encrypt, PublicKey
 
 from .local import Client as LocalClient
 from .local.base import Manifest
-from .steam_network.mvc_classes import (ControllerAuthData,
+from .mvc_classes import (ControllerAuthData,
                                         ModelAuthCredentialData,
                                         ModelAuthError, ModelAuthPollError,
                                         ModelAuthPollResult, SteamPublicKey,
                                         WebpageView)
-from .steam_network.protocol.messages.steammessages_auth import \
+from .steam_client.messages.steammessages_auth import \
     EAuthSessionGuardType
-from .steam_network.steam_network_model import SteamNetworkModel
-from .steam_network.steam_network_view import SteamNetworkView
-from .steam_network.user_credential_data import UserCredentialData
-from .steam_network.utils import get_os
-from .version import __version__
+from .plugin_model import PluginModel
+from .plugin_view import SteamNetworkView
+from .user_credential_data import UserCredentialData
+from .utils import get_os
+from .data.version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class SteamPlugin(Plugin):
     """
     def __init__(self, reader, writer, token):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
-        self._model: SteamNetworkModel = SteamNetworkModel()
+        self._model: PluginModel = PluginModel()
         self._view: SteamNetworkView = SteamNetworkView()
         self._auth_data: Optional[ControllerAuthData] = None
         self._unauthed_username: Optional[str] = None  # username is only used in subsequent auth calls

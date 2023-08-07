@@ -239,7 +239,7 @@ def ClearProtobufFiles(c):
 def GenerateProtobufMessages(c):
     proto_files_dir = os.path.join(BASE_DIR, "protobuf_files", "proto")
 
-    out_dir = os.path.join(BASE_DIR, "src", "steam_network", "protocol", "messages")
+    out_dir = os.path.join(BASE_DIR, "src", "steam_client", "messages")
     #out_dir = os.path.join(BASE_DIR, "protobuf_files", "gen")
 
     try:

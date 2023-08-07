@@ -8,9 +8,9 @@ from .caches.friends_cache import FriendsCache
 from .caches.games_cache import GamesCache
 from .caches.packages_cache import PackageCache
 from .caches.cache_helpers import PackageDataUpdateEvent
-from .protocol.message_helpers import MultiHandler, OwnedTokenTuple
-from .protocol.messages.steammessages_base import CMsgProtoBufHeader
-from .protocol.messages.steammessages_clientserver import CMsgClientLicenseList
+from .steam_client.message_helpers import MultiHandler, OwnedTokenTuple
+from .steam_client.messages.steammessages_base import CMsgProtoBufHeader
+from .steam_client.messages.steammessages_clientserver import CMsgClientLicenseList
 
 logger = logging.getLogger(__name__)
 

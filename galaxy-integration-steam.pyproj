@@ -107,7 +107,7 @@
     <Compile Include="src\caches\__init__.py" />
     <Compile Include="src\next_step_settings.py" />
     <Compile Include="src\steam_client\message_router.py" />
-    <Compile Include="src\steam_client\steam_model_messages.py" />
+    <Compile Include="src\steam_client\unsolicited_message_handler.py" />
     <Compile Include="src\steam_client\steam_client_enumerations.py" />
     <Compile Include="src\steam_client\messages\encrypted_app_ticket.py" />
     <Compile Include="src\steam_client\messages\enums.py" />
@@ -127,7 +127,7 @@
     <Compile Include="src\steam_client\messages\steammessages_webui_friends.py" />
     <Compile Include="src\steam_client\messages\__init__.py" />
     <Compile Include="src\mvc_classes.py" />
-    <Compile Include="src\steam_client\unsolicited_message_handler.py" />
+    <Compile Include="src\steam_client\steam_model_messages.py" />
     <Compile Include="src\steam_client\steam_http_client.py" />
     <Compile Include="src\plugin_model.py" />
     <Compile Include="src\plugin_view.py" />
