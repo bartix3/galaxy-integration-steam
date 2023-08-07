@@ -5,12 +5,13 @@
 """
 from asyncio import Event
 import platform
-from traceback import format_exc, format_tb
+from traceback import format_exc, format_stack
 from queue import Empty
 
 from galaxy.api.errors import (AccessDenied, BackendError, BackendNotAvailable,
                                BackendTimeout, Banned, InvalidCredentials,
-                               NetworkError, TemporaryBlocked, AuthenticationRequired, UnknownError)
+                               NetworkError, TemporaryBlocked, AuthenticationRequired)
+from galaxy.api.jsonrpc import UnknownError
 
 from typing import Optional, Generic, List, TypeVar, Tuple, cast
 
@@ -130,7 +131,7 @@ def translate_error(result: EResult) -> Exception:
     return UnknownError(data=data)
 
 def get_traceback(getError : bool = True, limit:Optional[int] = 10) -> str:
-    return format_exc(limit) if getError else ''.join(format_tb(limit=limit))
+    return format_exc(limit) if getError else ''.join(format_stack(limit=limit))
 
 
 T = TypeVar("T") 

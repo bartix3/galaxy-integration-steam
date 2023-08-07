@@ -43,7 +43,7 @@ from .mvc_classes import (ControllerAuthData,
 from .steam_client.messages.steammessages_auth import \
     EAuthSessionGuardType
 from .plugin_model import PluginModel
-from .plugin_view import SteamNetworkView
+from .plugin_view import PluginView
 from .user_credential_data import UserCredentialData
 from .utils import get_os
 from .data.version import __version__
@@ -69,13 +69,14 @@ class SteamPlugin(Plugin):
     """
     def __init__(self, reader, writer, token):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
-        self._model: PluginModel = PluginModel()
-        self._view: SteamNetworkView = SteamNetworkView()
+        self._maybe_model: Optional[PluginModel] = None
+        self._maybe_view: PluginView = None
         self._auth_data: Optional[ControllerAuthData] = None
         self._unauthed_username: Optional[str] = None  # username is only used in subsequent auth calls
         self._unauthed_steam_id: Optional[int] = None  # unverified steam id. Once verified, this is stored in the cache.
         self._use_paranoid_login: bool = False  # stores the paranoid login state if we need to fall back to login page.
         self._two_factor_info: Optional[ModelAuthCredentialData] = None  # current two-factor data. Used to redo 2FA on a failure. Once a poll is successful, this data is removed.
+        self.handshake_complete_event: asyncio.Event = asyncio.Event()
 
         # local features
         self._last_launch: Timestamp = 0
@@ -83,6 +84,18 @@ class SteamPlugin(Plugin):
 
         # local client
         self.local = LocalClient()
+
+    @property
+    def _model(self) -> PluginModel:
+        if not self.handshake_complete_event.is_set():
+            raise UnknownBackendResponse()
+        return cast(PluginModel, self._maybe_model)
+
+    @property
+    def _view(self) -> PluginView:
+        if not self.handshake_complete_event.is_set():
+            raise UnknownBackendResponse()
+        return cast(PluginView, self._maybe_view)
 
     # features are normally auto-detected. Since we only support one form of login, we can allow this behavior.
 
@@ -95,7 +108,9 @@ class SteamPlugin(Plugin):
         Any initialization required on the client that is necessary for the plugin to work is now complete.
         This means things like the persistent cache are now available to us.
         """
-        self._model.initialize(self.persistent_cache)
+        self._maybe_model = PluginModel(self.persistent_cache)
+        self._maybe_view = PluginView()
+        self.handshake_complete_event.set()
 
     async def authenticate(self, stored_credentials: Optional[Dict[str, Any]] = None) -> Union[Authentication, NextStep]:
         # user credential data from dict includes a null check so we don't need it here.

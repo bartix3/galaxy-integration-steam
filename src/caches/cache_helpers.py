@@ -31,6 +31,11 @@ class PackageAppUpdateEvent(NamedTuple):
 class SubscriptionPlusDLC(SubscriptionGame):
     dlcs: Optional[List[Dlc]]
 
+    def __init__(self, game_title: str, game_id: str, start_time: Optional[int], end_time: Optional[int], dlcs: List[Dlc]):
+        super().__init__(game_title, game_id, start_time, end_time)
+        self.dlcs = dlcs
+
+
     #useful if the user obtains a game previously cached as a subscription via purchase.
     def to_game(self) -> Game:
         return Game(self.game_id, self.game_title, self.dlcs, LicenseInfo(LicenseType.SinglePurchase, None))

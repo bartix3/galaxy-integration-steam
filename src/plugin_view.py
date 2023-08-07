@@ -16,7 +16,7 @@ from .utils import get_traceback
 from .next_step_settings import NextStepSettings
 logger = logging.getLogger(__name__)
 
-class SteamNetworkView:
+class PluginView:
     """ Class that handles the web pages displayed to the user.
 
     This involves parsing the get strings we receive when a page finishes, as well as setting any error params and so on. Most of the work is done in HTML and JS, but doing this using helpers was getting unwieldy. 
@@ -82,9 +82,9 @@ class SteamNetworkView:
             raise UnknownBackendResponse()
         elif view == WebpageView.TWO_FACTOR_CONFIRM and len(auth_modes) > 1:
             fallback_view = WebpageView.from_CAuthentication_AllowedConfirmation(auth_modes[1])
-
-            bonus_data["fallback_method"] = fallback_view.view_name
-            bonus_data["fallback_message"] = auth_modes[1].associated_message
+            if fallback_view is not None:
+                bonus_data["fallback_method"] = fallback_view.view_name
+                bonus_data["fallback_message"] = auth_modes[1].associated_message
 
         bonus_data["auth_message"] = auth_modes[0].associated_message
         start_uri = self._build_start_uri(view.view_name, **bonus_data)
@@ -119,12 +119,12 @@ class SteamNetworkView:
         params = parse_qs(parsed_url.query)
         if ("username" not in params):
             logger.info("Paranoid username is missing. Displaying the special login page with error message.")
-            return self.paranoid_username_failed()
+            return self.paranoid_username_failed(ModelAuthError(AuthErrorCode.MISSING_USERNAME, ""))
         else:
-            return params["username"]
+            return params["username"][0]
 
     def paranoid_username_success(self, username: str, key: PublicKey, timestamp: int) -> NextStep:
-        bonus_data : Dict[str, str] = {"username" : username, "modulus" : str(key.n), "exponent" : str(key.e), "timestamp" : timestamp}
+        bonus_data : Dict[str, str] = {"username" : username, "modulus" : str(key.n), "exponent" : str(key.e), "timestamp" : str(timestamp)}
         
         start_uri = self._build_start_uri(WebpageView.PARANOID_ENCIPHERED.view_name, **bonus_data)
         return self._build_NextStep(start_uri, WebpageView.PARANOID_ENCIPHERED.end_uri_regex)
@@ -142,7 +142,10 @@ class SteamNetworkView:
 
         Returns either the enciphered password as an array of bytes, or a NextStep object if the format was not as we expected. 
         """
-        return bytes.fromhex(credentials["enciphered_password"])
+        
+        parsed_url = urlsplit(credentials["end_uri"])
+        params = parse_qs(parsed_url.query)
+        return (params['username'][0], bytes.fromhex(params["enciphered_password"][0]), int(params['timestamp'][0]))
 
     #paranoid part 2 success is the same as regular login success so that is called instead. 
     

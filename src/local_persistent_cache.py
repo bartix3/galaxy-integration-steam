@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from datetime import datetime
 
+from galaxy.api.types import Game
+
 from .caches.cache_base import CacheBase
 from .caches.friends_cache import FriendsCache
 from .caches.games_cache import GamesCache
@@ -66,5 +68,11 @@ class LocalPersistentCache:
     async def close(self):
         raise NotImplementedError()
 
-    def get_machine_id(self):
+    def get_machine_id(self) -> bytes:
+        raise NotImplementedError()
+
+    def get_cell_id(self) -> int:
+        raise NotImplementedError()
+
+    def get_games(self) -> List[Game]:
         raise NotImplementedError()

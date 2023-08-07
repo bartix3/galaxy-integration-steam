@@ -29,7 +29,7 @@ def _retrieve_classes(file_data:str) -> Set[str]:
     return set(map(lambda x: x.group(0), matches))
 
 def _retrieve_forward_references(file_data : str) -> Set[str]:
-    matches: Set[Match] = set(map(lambda x: x.group(0), findall(':\s*(?:List\s*\[\s*\r?\n?\s*|)"(\w+)"', file_data, MULTILINE))) #removes dupes during set cast. 
+    matches : Set[str] = set(map(lambda x: x.group(0), findall(':\s*(?:List\s*\[\s*\r?\n?\s*|)"(\w+)"', file_data, MULTILINE))) #removes dupes during set cast. 
     return matches
         
 def _cleanup_dependencies(file_name: str, convert_to_proto_file_name : Callable[[str], str], convert_to_compiled_file_name: Callable[[str], str], cached_lookup: Dict[str, Set[str]]):

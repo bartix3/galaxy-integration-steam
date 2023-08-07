@@ -27,6 +27,7 @@ from betterproto import Message
 from websockets.client import WebSocketClientProtocol
 #local modules
 from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleResponse, AwaitableEMessageResponse, AwaitableJobNameResponse, MessageLostException, ProtoResult
+from .message_router import MessageRouter
 from .messages.service_cloudconfigstore import (
     CCloudConfigStore_Download_Request, CCloudConfigStore_Download_Response,
     CCloudConfigStore_NamespaceVersion)
@@ -84,7 +85,7 @@ UPDATE_TWO_FACTOR = "Authentication.UpdateAuthSessionWithSteamGuardCode#1"
 CHECK_AUTHENTICATION_STATUS = "Authentication.PollAuthSessionStatus#1"
 
 
-class ProtobufSocketHandler:
+class SteamModelMessages:
     """ Wraps a websocket with all the information we need to successfully send and receive messages to Steam's servers.
 
      Since this class is designed to be as simple as possible, it will simply hand-off any unexpected messages, only parsing what it can.
@@ -104,18 +105,13 @@ class ProtobufSocketHandler:
     _ITERATOR_WIDTH = 20
 
 
-    def __init__(self, socket_uri: str, socket: WebSocketClientProtocol, queue: Queue, future_lookup: Dict[int, AwaitableResponse], box_id: int = 0, process_id: int = 0):
-
-        self._socket_uri = socket_uri
-        self._socket: WebSocketClientProtocol = socket
-        self._queue: Queue = queue
+    def __init__(self, router: MessageRouter, box_id: int = 0, process_id: int = 0):
+        self._router = router
         # this is actually clever. A lazy iterator that increments every time you call next.
         self._job_id_iterator: Iterator[int] = count(1)
         # guaranteed to not be null unless the
-        self._session_id: Optional[int] = None
-        self.confirmed_steam_id: Optional[int] = None
         self._heartbeat_task: Optional[Task[None]] = None
-        self._job_id_high_bits: int = ProtobufSocketHandler.generate_job_id_high_bits(box_id, process_id)
+        self._job_id_high_bits: int = SteamModelMessages.generate_job_id_high_bits(box_id, process_id)
         
 
     @classmethod
@@ -148,26 +144,10 @@ class ProtobufSocketHandler:
 
         return value
 
-    @property
-    def socket_uri(self):
-        return self._socket_uri
-
-    async def run(self):
-        """Run the websocket receive loop asynchronously.
-
-        This is only responsible for receiving a packet and extracting the message from it.
-        it then hands off that package to another task (either the caller or the cache, depending on who initiated it)
-        This should never error, except when the socket shuts down or is explicitely cancelled.
-        """
-        # this will error out with connection closed, either connection closed OK or connection closed error.
-        # it should never throw otherwise and will loop until the plugin closes (which will cause a task cancelled exception, but that's ok).
-        async for message in self._socket:
-            await self._process_packet(message)
-
     async def SendHello(self):
         message = CMsgClientHello(self._MSG_PROTOCOL_VERSION)
         logger.info("Sending hello")
-        await self._send_no_wait(message, EMsg.ClientHello)
+        await self._router.send_client_no_wait(message, EMsg.ClientHello, None)
 
     # Standard Request/Response style messages. They aren't synchronous by nature of websocket communication, but we can write our code to closely mimic that behavior.
 
@@ -175,12 +155,9 @@ class ProtobufSocketHandler:
     async def GetPasswordRSAPublicKey(self, username: str) -> ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response]:
         logger.info("Sending rsa key request for user")
         msg = CAuthentication_GetPasswordRSAPublicKey_Request(username)
-        try:
-            header, resp = await self._send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
-            logger.info("obtained rsa key for user")
-            return ProtoResult(header.eresult, header.error_message, resp)
-        except MessageLostException:
-            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+        header, resp = await self._send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
+        logger.info("obtained rsa key for user")
+        return ProtoResult(header.eresult, header.error_message, resp)
 
     # start the login process with credentials
     async def BeginAuthSessionViaCredentials(self, account_name: str, enciphered_password: bytes, timestamp: int, os_value: int, language: Optional[str] = None) -> ProtoResult[CAuthentication_BeginAuthSessionViaCredentials_Response]:
@@ -208,12 +185,9 @@ class ProtobufSocketHandler:
         message.device_details.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
 
         logger.info("Sending log on message using credentials in new authorization workflow")
-        try:
-            header, resp = await self._send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
-            logger.info("Received log on credentials response")
-            return ProtoResult(header.eresult, header.error_message, resp)
-        except MessageLostException:
-            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
+        header, resp = await self._send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
+        logger.info("Received log on credentials response")
+        return ProtoResult(header.eresult, header.error_message, resp)
 
     # update login with steam guard code
     async def UpdateAuthSessionWithSteamGuardCode(self, client_id: int, steam_id: int, code: str, code_type: EAuthSessionGuardType) -> ProtoResult[CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response]:
@@ -292,8 +266,6 @@ class ProtobufSocketHandler:
         try:
             header, resp = await self._send_recv_client_message(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
             return ProtoResult(header.eresult, header.error_message, resp)
-        except MessageLostException:
-            return ProtoResult(EResult.TryAnotherCM, "connection was lost before message could be obtained", None)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
             raise

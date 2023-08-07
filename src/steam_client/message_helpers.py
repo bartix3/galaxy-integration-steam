@@ -192,15 +192,16 @@ class AwaitableEMessageMultipleResponse(AwaitableEMessageResponse[X], Generic[X]
     def get_future(self) -> 'Future[List[Tuple[CMsgProtoBufHeader,X]]]':
         return cast('Future[List[Tuple[CMsgProtoBufHeader,X]]]', super()._future)
 
+
 W = TypeVar("W", bound=betterproto.Message)
 class ProtoResult(Generic[W]):  # noqa: E302
     # eresult is almost always an int because it's that way in the protobuf file, but it should be an enum. so expect it to be an int (and be pleasantly surprised when it isn't), but accept both.
-    def __init__(self, eresult: Union[EResult, int], error_message: str, body: Optional[W]) -> None:
+    def __init__(self, eresult: Union[EResult, int], error_message: str, body: W) -> None:
         if isinstance(eresult, int):
             eresult = EResult(eresult)
         self._eresult: EResult = eresult
         self._error_message = error_message
-        self._body: Optional[W] = body
+        self._body: W = body
 
     @property
     def eresult(self):

@@ -20,8 +20,9 @@ from galaxy.api.errors import (AccessDenied, AuthenticationRequired, BackendErro
 from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 from websockets.typing import Data
+from gzip import decompress
 
-from .messages.steammessages_base import CMsgProtoBufHeader
+from .messages.steammessages_base import CMsgMulti, CMsgProtoBufHeader
 from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleResponse, AwaitableEMessageResponse, AwaitableJobNameResponse, MessageWithTimestamp, MultiHandler
 from .steam_client_enumerations import EMsg
 from .unsolicited_message_handler import NonstandardMessageHandler
@@ -46,6 +47,7 @@ class MessageRouter:
         self._websocket_list: WebSocketList = WebSocketList()
         self._persistent_cache: LocalPersistentCache = persistent_cache
         self._unsolicited_handler: NonstandardMessageHandler = NonstandardMessageHandler(persistent_cache)
+        self.accepting_messages_event: asyncio.Event = asyncio.Event()
 
 
     async def run(self): 
@@ -128,7 +130,7 @@ class MessageRouter:
 
     async def process_loop(self, queue: asyncio.Queue[MessageWithTimestamp]):
         #as long as can get more messages or we still have messages to process, keep going.
-        while self._has_more_messages or not queue.empty():
+        while not self.no_more_messages or not queue.empty():
             try:
                 data, received_timestamp = await asyncio.wait_for(queue.get(), self._RECEIVE_DATA_TIMEOUT_SECONDS)
                 await self._process_packet(data, received_timestamp, None)
@@ -277,12 +279,12 @@ class MessageRouter:
         msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(head))
         return msg_info + head + body
 
-    async def send_no_wait(self, msg: Message, emsg: EMsg, steam_id: int, job_id: int, job_name: Optional[str] = None):
-        """Send a message along the websocket. Do not expect a response.
+    async def send_client_no_wait(self, msg: Message, emsg: EMsg, steam_id: Optional[int]):
+        """Send a client message along the websocket. Do not expect a response.
 
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
         """
-        header = self._generate_header(steam_id, job_id, job_name)
+        header = self._generate_header(steam_id)
         data = self._generate_message(header, msg, emsg)
 
         if LOG_SENSITIVE_DATA:

@@ -1,5 +1,5 @@
 import logging
-from typing import List, AsyncGenerator, Dict, Tuple
+from typing import List, AsyncGenerator, Dict, Optional, Tuple
 import time
 import ssl
 import certifi
@@ -41,11 +41,13 @@ class WebSocketList:
         self._servers_blacklist: Dict[HostName, Timeout] = {}
     
     @staticmethod 
-    def __host_name(url: str) -> HostName:
-        return yarl.URL(url).host
+    def __host_name(url: str) -> Optional[HostName]:
+        return yarl.URL(url).host 
     
     def add_server_to_ignored(self, socket_addr: str, timeout_sec: int = BLACKLISTED_CM_EXPIRATION_SEC):
-        self._servers_blacklist[self.__host_name(socket_addr)] = current_time() + timeout_sec
+        host = self.__host_name(socket_addr)
+        if host is not None:
+            self._servers_blacklist[host] = current_time() + timeout_sec
 
     async def _fetch_new_list(self, cell_id: int) -> List[str]:
         servers = await self._http_client.get_servers(cell_id)
@@ -55,7 +57,10 @@ class WebSocketList:
     async def _get(self, cell_id: int) -> AsyncGenerator[str, None]:
         sockets = await self._fetch_new_list(cell_id)
         for socket in sockets:
-            if current_time() > self._servers_blacklist.get(self.__host_name(socket), 0):
+            host = self.__host_name(socket)
+            if host is None:
+                logger.warning("Host could not be resolved. Skipping server %s", socket)
+            elif current_time() > self._servers_blacklist.get(host, 0):
                 yield socket
             else:
                 logger.info("Omitting blacklisted server %s", socket)
