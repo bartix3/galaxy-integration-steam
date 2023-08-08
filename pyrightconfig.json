@@ -1,0 +1,25 @@
+{
+	"include": [
+		"src"
+	],
+	
+	"exclude": [
+		"**/__pycache__",
+		"**/DEPRECATED_*"
+	],
+
+	"ignore": [
+	],
+
+	"stubPath": "stubs",
+	"venv": "env",
+
+	"reportMissingImports": true,
+	"reportMissingTypeStubs": true,
+
+	"pythonVersion": "3.7",
+	"pythonPlatform": "Windows",
+
+	"executionEnvironments": [
+	]
+}

@@ -7,12 +7,13 @@ Contains MessageRouter, a class designed to take messages in and return their re
 import asyncio
 import datetime
 import ipaddress
+from itertools import count
 import logging
 import struct
 from traceback import format_exception
 import traceback
 
-from typing import Dict, Optional, Tuple, Type, TypeVar, cast
+from typing import Dict, Iterator, Optional, Tuple, Type, TypeVar, cast
 
 from betterproto import Message
 from galaxy.api.errors import (AccessDenied, AuthenticationRequired, BackendError, BackendNotAvailable,
@@ -27,6 +28,7 @@ from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleRespons
 from .steam_client_enumerations import EMsg
 from .unsolicited_message_handler import NonstandardMessageHandler
 from ..local_persistent_cache import LocalPersistentCache
+from ..utils import GenericEvent
 from .websocket_list import WebSocketList
 
 logger = logging.getLogger(__name__)
@@ -41,14 +43,24 @@ class MessageRouter:
     _MSG_PROTOCOL_VERSION = 65580
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
 
-    def __init__(self, persistent_cache: LocalPersistentCache) -> None:
+    _RECEIVE_DATA_TIMEOUT_SECONDS = 5
+    _PROTO_MASK = 0x80000000
+
+
+    def __init__(self, persistent_cache: LocalPersistentCache, box_id: int = 0, process_id: int = 0) -> None:
         self._future_lookup: Dict[int, AwaitableResponse] = {}
         self.no_more_messages: bool = False
         self._websocket_list: WebSocketList = WebSocketList()
         self._persistent_cache: LocalPersistentCache = persistent_cache
         self._unsolicited_handler: NonstandardMessageHandler = NonstandardMessageHandler(persistent_cache)
         self.accepting_messages_event: asyncio.Event = asyncio.Event()
+        self._job_id_high_bits: int = self._generate_job_id_high_bits(box_id, process_id)
+        self._job_id_iterator: Iterator[int] = count(1)
+        self._session_id: Optional[int] = None
+        self._socket_ready_event: GenericEvent[WebSocketClientProtocol] = GenericEvent()
 
+    async def get_socket(self) -> WebSocketClientProtocol:
+        return await self._socket_ready_event.wait()
 
     async def run(self): 
         """ Create and run the asyncio tasks necessary to receive and process all socket calls.
@@ -62,9 +74,10 @@ class MessageRouter:
         process_task: Optional[asyncio.Task[None]] = None
         receive_task: Optional[asyncio.Task[None]] = None
         future_lookup_dict: Dict[int, AwaitableResponse] = {}
-        socket : WebSocketClientProtocol
         socket_uri: str
-        socket, socket_uri = await self._websocket_list.connect_to_best_available(self._persistent_cache.get_cell_id())
+        socket : WebSocketClientProtocol
+        socket_uri, socket = await self._websocket_list.connect_to_best_available(self._persistent_cache.get_cell_id())
+        self._socket_ready_event.set(socket)
         queue: asyncio.Queue[MessageWithTimestamp] = asyncio.Queue()
 
         recoverable: bool = True
@@ -73,7 +86,7 @@ class MessageRouter:
         while recoverable:
 
             if receive_task is None:
-                receive_task = asyncio.create_task(self.receive_loop(socket, queue))
+                receive_task = asyncio.create_task(self.receive_loop(queue))
                 self.no_more_messages = False
             
             if process_task is None:
@@ -124,7 +137,8 @@ class MessageRouter:
 
         logger.info("Shutting down model run task")
         
-    async def receive_loop(self, socket: WebSocketClientProtocol, queue: asyncio.Queue[MessageWithTimestamp]):
+    async def receive_loop(self, queue: asyncio.Queue[MessageWithTimestamp]):
+        socket = await self.get_socket()
         async for message in socket:
             await queue.put(MessageWithTimestamp(message, DateTime.now()))
 
@@ -208,7 +222,7 @@ class MessageRouter:
             else:
                 logger.info(f"Received Unsolicited message {emsg.name}" + (f"({header.target_job_name})" if emsg == EMsg.ServiceMethodResponse else ""))
 
-            await self._handle_unsolicited_message(emsg, header, body, containing_multi)
+            await self._handle_unsolicited_message(emsg, header, body, received_timestamp, containing_multi)
 
     async def _process_multi(self, header: CMsgProtoBufHeader, body: bytes, received_timestamp: DateTime, _: Optional[MultiHandler]): 
         #multis are annoying. To properly handle them, we're sending off a "start" and "end" message to the caching process run loop 
@@ -250,9 +264,39 @@ class MessageRouter:
             self._persistent_cache.set_authentication_lost(received_timestamp)
         #let any other errors bubble up to task. 
 
+    
+    @classmethod
+    def _generate_job_id_high_bits(cls, box_id: int, process_id: int):
+        value: int = 0
+        #when we shift, we do so in preparation of the next block, so our shift width is that of the next part of the job id. 
+        #handle box id.
+        if box_id != 0:
+            box_id &= cls._BOX_ID_MASK # cap at 10 bits
+            value = box_id << cls._PROCESS_ID_WIDTH
+        #handle process id
+        if process_id != 0:
+            process_id &= cls._PROCESS_ID_MASK # cap at 4 bits.
+            value = (value + process_id) << cls._DATETIME_WIDTH 
+        #handle date time
+        utc_now = DateTime.now(datetime.timezone.utc)
+        delta_time = int((utc_now - cls._DATETIME_JAN_1_2005).total_seconds()) # Total seconds since jan 1 2005 as an integer. Used by job id, but idk why that is the arbitrary date we use.
+        # Limit to 30 bits because we have a fixed 64-bit integer for job id and that's how many characters are allotted. wont be relevant until ~2060 +/- 5 years (didn't do the math)
+        relative_start_time : int = delta_time & cls._DATETIME_MASK 
+
+        value = (value + relative_start_time) << cls._ITERATOR_WIDTH # relative start time is already capped. the value is constant so we can afford to make it compile-time safe.
+
+    def get_next_job_id(self) -> int:
+        value = self._job_id_high_bits
+        iteration = next(self._job_id_iterator)
+        if iteration == self._ITERATOR_MAX:
+            self._job_id_iterator = count(1)
+            iteration = 0
+        value += iteration
+
+        return value
 
     # header and message generates are always called back to back. feel free to merge thes into one.
-    def _generate_header(self, steam_id: Optional[int], job_id: Optional[int] = None, job_name: Optional[str] = None) -> CMsgProtoBufHeader:
+    def generate_header(self, steam_id: Optional[int], job_id: Optional[int] = None, job_name: Optional[str] = None) -> CMsgProtoBufHeader:
         """Generate the protobuf header that the send functions require.
 
         """
@@ -284,16 +328,18 @@ class MessageRouter:
 
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
         """
-        header = self._generate_header(steam_id)
+        header = self.generate_header(steam_id)
         data = self._generate_message(header, msg, emsg)
 
         if LOG_SENSITIVE_DATA:
             logger.info("[Out] %s (%dB), params:\n", repr(emsg), len(data), repr(msg))
         else:
             logger.info("[Out] %s (%dB)", repr(emsg), len(data))
-        await self._socket.send(data)
+        
+        socket = await self.get_socket()
+        await socket.send(data)
 
-    async def _send_common(self, header: CMsgProtoBufHeader, msg: Message, request_emsg: EMsg, response_holder: AwaitableResponse, unique_identifier: int, override_steam_id: Optional[int] = None):
+    async def send_common(self, header: CMsgProtoBufHeader, msg: Message, request_emsg: EMsg, response_holder: AwaitableResponse, unique_identifier: int):
         """Perform the common send and receive logic.
         """
         try:
@@ -305,7 +351,9 @@ class MessageRouter:
                 logger.info("[Out] %s (%dB), params:%s\n", repr(request_emsg), len(data), repr(msg))
             else:
                 logger.info("[Out] %s (%dB)", repr(request_emsg), len(data))
-            await self._socket.send(data)
+
+            socket = await self.get_socket()
+            await socket.send(data)
         except Exception as e:
             logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
             response_holder.get_future().cancel()
@@ -315,8 +363,8 @@ class MessageRouter:
     U = TypeVar("U", bound= Message)
     async def send_recv_service_message(self, msg: Message, response_type: Type[U], send_recv_name: str) -> Tuple[CMsgProtoBufHeader, U]:
         emsg = EMsg.ServiceMethodCallFromClientNonAuthed if self.confirmed_steam_id is None else EMsg.ServiceMethodCallFromClient
-        job_id = self._get_job_id()
-        header = self._generate_header(job_id, send_recv_name)
+        job_id = self.get_next_job_id()
+        header = self.generate_header(job_id, send_recv_name)
         resp_holder = AwaitableJobNameResponse.create_default(response_type, send_recv_name)
 
         await self._send_common(header, msg, emsg, resp_holder, job_id)
@@ -330,7 +378,22 @@ class MessageRouter:
     V = TypeVar("V", bound= Message)
     async def send_recv_client_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
 
-        header = self._generate_header(override_steam_id=override_steam_id)
+        header = self.generate_header(override_steam_id=override_steam_id)
+        unique_identifier = expected_return_format.value * -1
+        resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
+        await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
+
+        try:
+            return await resp_holder.get_future()
+        except Exception as e:
+            logger.exception(f"Unexpected error receiving the data: {e}", exc_info=True)
+            self._future_lookup.pop(unique_identifier)
+            raise
+
+    W = TypeVar("W", bound= Message)
+    async def send_recv_client_multiple_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
+
+        header = self.generate_header(override_steam_id=override_steam_id)
         unique_identifier = expected_return_format.value * -1
         resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
         await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
@@ -344,9 +407,10 @@ class MessageRouter:
 
     # old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow.
     async def _get_obfuscated_private_ip(self) -> int:
-        logger.info('Websocket state is: %s' % self._socket.state.name)
-        await self._socket.ensure_open()
-        host, _ = self._socket.local_address
+        socket = await self.get_socket()
+        logger.info('Websocket state is: %s' % socket.state.name)
+        await socket.ensure_open()
+        host, _ = socket.local_address
         ip = int(ipaddress.IPv4Address(host))
         obfuscated_ip = ip ^ self._IP_OBFUSCATION_MASK
         logger.debug(f"Local obfuscated IP: {obfuscated_ip}")

@@ -15,6 +15,9 @@ Moved all controller login to plugin. there was no point in having that logic th
 
 CHANGELOG: 8/1/2023: 
 MyPy fixes
+
+8/6/2023: 
+Updated package structure and references in this file to match.
 """
 
 import asyncio

@@ -61,10 +61,8 @@ class NonstandardMessageHandler():
 
     When creating new things to handle in this class, please make sure to check the rules defined in this file so you don't cause unexpected behavior.
     """
-
-    _RECEIVE_DATA_TIMEOUT_SECONDS = 5
-    _PROTO_MASK = 0x80000000
     _ACCOUNT_ID_MASK = 0x0110000100000000
+
 
     def __init__(self, local_cache: LocalPersistentCache):
         self._local_cache : LocalPersistentCache = local_cache

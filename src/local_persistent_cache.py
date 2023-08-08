@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-from datetime import datetime
+import datetime
 
 from galaxy.api.types import Game
 
@@ -15,6 +15,9 @@ from .steam_client.messages.steammessages_base import CMsgProtoBufHeader
 from .steam_client.messages.steammessages_clientserver import CMsgClientLicenseList
 
 logger = logging.getLogger(__name__)
+
+DateTime = datetime.datetime
+
 
 GET_APP_RICH_PRESENCE = "Community.GetAppRichPresenceLocalization#1"
 CLOUD_CONFIG_DOWNLOAD = 'CloudConfigStore.Download#1'
@@ -34,7 +37,7 @@ class LocalPersistentCache:
         self._modified = False  # set if anything in this cache updates. unset when the data is pushed to gog's internal cache. initially unset.
         self._username: Optional[str] = None
         self._confirmed_steam_id: Optional[int] = None
-        self._last_authenticated_timestamp: Optional[datetime] = None
+        self._last_authenticated_timestamp: Optional[DateTime] = None
         self._persistent_cache: Dict[str, Any] = cache
         self.package_cache = PackageCache()
         self.games_cache = GamesCache()
@@ -62,7 +65,8 @@ class LocalPersistentCache:
     def are_games_and_subscriptions_ready(self):
         return not self.is_processing_games_and_subscriptions() and self.games_cache.checking_or_checked_against_steam_data.is_set()
 
-
+    def set_authentication_lost(self, message_with_auth_lost_receive_timestamp: DateTime):
+        raise NotImplementedError()
 
 
     async def close(self):

@@ -6,7 +6,7 @@
     <ProjectGuid>{6ca78a9c-6df1-4c47-b700-4f413ff2ce59}</ProjectGuid>
     <ProjectHome />
     <StartupFile>src\plugin.py</StartupFile>
-    <SearchPath />
+    <SearchPath>env\Lib\site-packages</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
@@ -14,6 +14,8 @@
     <InterpreterId>MSBuild|env|$(MSBuildProjectFullPath)</InterpreterId>
     <TestFramework>Pytest</TestFramework>
     <SuppressConfigureTestFrameworkPrompt>true</SuppressConfigureTestFrameworkPrompt>
+    <InterpreterPath>env\scripts\python.exe</InterpreterPath>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
   <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
@@ -48,6 +50,7 @@
     <Content Include="protobuf_files\proto\steammessages_player.proto" />
     <Content Include="protobuf_files\proto\steammessages_unified_base.proto" />
     <Content Include="protobuf_files\proto\steammessages_webui_friends.proto" />
+    <Content Include="pyrightconfig.json" />
     <Content Include="pytest.ini" />
     <Content Include="README.md" />
     <Content Include="protobuf_files\README_UPDATE_PROTOBUF_FILES.md" />
@@ -141,9 +144,6 @@
     <Compile Include="task_helper.py" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="env\" />
-    <Folder Include="env\Lib\" />
-    <Folder Include="env\Lib\site-packages\" />
     <Folder Include="src\data\" />
     <Folder Include="src\steam_client\" />
     <Folder Include="stubs\" />
@@ -166,15 +166,6 @@
     <Folder Include="tests" />
   </ItemGroup>
   <ItemGroup>
-    <Interpreter Include="env1\">
-      <Id>env1</Id>
-      <Version>3.7</Version>
-      <Description>env1 (Python 3.7 (32-bit))</Description>
-      <InterpreterPath>Scripts\python.exe</InterpreterPath>
-      <WindowsInterpreterPath>Scripts\pythonw.exe</WindowsInterpreterPath>
-      <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
-      <Architecture>X86</Architecture>
-    </Interpreter>
     <Interpreter Include="env\">
       <Id>env</Id>
       <Version>3.7</Version>

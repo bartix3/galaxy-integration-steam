@@ -105,44 +105,11 @@ class SteamModelMessages:
     _ITERATOR_WIDTH = 20
 
 
-    def __init__(self, router: MessageRouter, box_id: int = 0, process_id: int = 0):
+    def __init__(self, router: MessageRouter):
         self._router = router
         # this is actually clever. A lazy iterator that increments every time you call next.
-        self._job_id_iterator: Iterator[int] = count(1)
         # guaranteed to not be null unless the
         self._heartbeat_task: Optional[Task[None]] = None
-        self._job_id_high_bits: int = SteamModelMessages.generate_job_id_high_bits(box_id, process_id)
-        
-
-    @classmethod
-    def generate_job_id_high_bits(cls, box_id: int, process_id: int):
-        value: int = 0
-        #when we shift, we do so in preparation of the next block, so our shift width is that of the next part of the job id. 
-        #handle box id.
-        if box_id != 0:
-            box_id &= cls._BOX_ID_MASK # cap at 10 bits
-            value = box_id << cls._PROCESS_ID_WIDTH
-        #handle process id
-        if process_id != 0:
-            process_id &= cls._PROCESS_ID_MASK # cap at 4 bits.
-            value = (value + process_id) << cls._DATETIME_WIDTH 
-        #handle date time
-        utc_now = datetime.now(timezone.utc)
-        delta_time = int((utc_now - cls._DATETIME_JAN_1_2005).total_seconds()) # Total seconds since jan 1 2005 as an integer. Used by job id, but idk why that is the arbitrary date we use.
-        # Limit to 30 bits because we have a fixed 64-bit integer for job id and that's how many characters are allotted. wont be relevant until ~2060 +/- 5 years (didn't do the math)
-        relative_start_time : int = delta_time & cls._DATETIME_MASK 
-
-        value = (value + relative_start_time) << cls._ITERATOR_WIDTH # relative start time is already capped. the value is constant so we can afford to make it compile-time safe.
-
-    def _get_job_id(self) -> int:
-        value = self._job_id_high_bits
-        iteration = next(self._job_id_iterator)
-        if iteration == self._ITERATOR_MAX:
-            self._job_id_iterator = count(1)
-            iteration = 0
-        value += iteration
-
-        return value
 
     async def SendHello(self):
         message = CMsgClientHello(self._MSG_PROTOCOL_VERSION)
@@ -155,7 +122,7 @@ class SteamModelMessages:
     async def GetPasswordRSAPublicKey(self, username: str) -> ProtoResult[CAuthentication_GetPasswordRSAPublicKey_Response]:
         logger.info("Sending rsa key request for user")
         msg = CAuthentication_GetPasswordRSAPublicKey_Request(username)
-        header, resp = await self._send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
+        header, resp = await self._router.send_recv_service_message(msg, CAuthentication_GetPasswordRSAPublicKey_Response, GET_RSA_KEY)
         logger.info("obtained rsa key for user")
         return ProtoResult(header.eresult, header.error_message, resp)
 
@@ -185,7 +152,7 @@ class SteamModelMessages:
         message.device_details.platform_type = EAuthTokenPlatformType.k_EAuthTokenPlatformType_SteamClient
 
         logger.info("Sending log on message using credentials in new authorization workflow")
-        header, resp = await self._send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
+        header, resp = await self._router.send_recv_service_message(message, CAuthentication_BeginAuthSessionViaCredentials_Response, LOGIN_CREDENTIALS)
         logger.info("Received log on credentials response")
         return ProtoResult(header.eresult, header.error_message, resp)
 
@@ -194,7 +161,7 @@ class SteamModelMessages:
         logger.info("Sending steam guard update data request")
         msg = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request(client_id, steam_id, code, code_type)
         try:
-            header, resp = await self._send_recv_service_message(msg, CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response, UPDATE_TWO_FACTOR)
+            header, resp = await self._router.send_recv_service_message(msg, CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response, UPDATE_TWO_FACTOR)
             logger.info("Received steam guard update response.")
             return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
@@ -208,7 +175,7 @@ class SteamModelMessages:
         logger.info("Requesting update on steam guard status")
         try:
             # we leave the token revoke unset, i'm not sure how the ctor works here so i'm just doing it this way.
-            header, resp = await self._send_recv_service_message(message, CAuthentication_PollAuthSessionStatus_Response, CHECK_AUTHENTICATION_STATUS)
+            header, resp = await self._router.send_recv_service_message(message, CAuthentication_PollAuthSessionStatus_Response, CHECK_AUTHENTICATION_STATUS)
             logger.info("Received update on steam guard status response")
             return ProtoResult(header.eresult, header.error_message, resp)
         except MessageLostException:
@@ -238,7 +205,7 @@ class SteamModelMessages:
         logger.info("Sending log on message using access token")
 
         try:
-            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogon, EMsg.ClientLogOnResponse, CMsgClientLogonResponse, override_steam_id)
+            header, resp = await self._router.send_recv_client_message(message, EMsg.ClientLogon, EMsg.ClientLogOnResponse, CMsgClientLogonResponse, override_steam_id)
             logger.info("Received log on message for access token response")
             return ProtoResult(header.eresult, header.error_message, resp)
 
@@ -264,7 +231,7 @@ class SteamModelMessages:
         message = CMsgClientLogOff()
         logger.info("Sending log off message")
         try:
-            header, resp = await self._send_recv_client_message(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
+            header, resp = await self._router.send_recv_client_message(message, EMsg.ClientLogOff, EMsg.ClientLoggedOff, CMsgClientLoggedOff)
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
@@ -275,7 +242,7 @@ class SteamModelMessages:
         message = CMsgClientLogOff()
         logger.info("Sending log off message")
         try:
-            await self._send_no_wait(message, EMsg.ClientLogOff, next(self._job_id_iterator))
+            await self._router.send_no_wait(message, EMsg.ClientLogOff, next(self._job_id_iterator))
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 
@@ -290,7 +257,7 @@ class SteamModelMessages:
         message = CMsgClientGetUserStats(game_id=game_id)
         logger.info("Retrieving user stats for game %d", game_id)
         try:
-            header, response = await self._send_recv_client_message(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, CMsgClientGetUserStatsResponse)
+            header, response = await self._router.send_recv_client_message(message, EMsg.ClientGetUserStats, EMsg.ClientGetUserStatsResponse, CMsgClientGetUserStatsResponse)
             logger.info("Retrieved user stats for game %d", game_id)
             return ProtoResult(header.eresult, header.error_message, response)
         except Exception as e:
@@ -308,11 +275,11 @@ class SteamModelMessages:
 
         message.packages = [CMsgClientPICSProductInfoRequestPackageInfo(x.package_id, x.access_token) for x in package_data]
 
-        job_id = self._get_job_id()
-        send_header = self._generate_header(job_id)
+        job_id = self._router.get_next_job_id()
+        send_header = self._router.generate_header(job_id)
         send_emsg = EMsg.ClientPICSProductInfoRequest
         resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
-        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
+        await self._router.send_common(send_header, message, send_emsg, resp_holder, job_id)
 
         data = await resp_holder.get_future()
         return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
@@ -330,11 +297,11 @@ class SteamModelMessages:
             app.appid = app_id
             message.apps.append(app)
         
-        job_id = self._get_job_id()
-        send_header = self._generate_header(job_id)
+        job_id = self._router.get_next_job_id()
+        send_header = self._router.generate_header(job_id)
         send_emsg = EMsg.ClientPICSProductInfoRequest
         resp_holder = AwaitableEMessageMultipleResponse.create_default(CMsgClientPICSProductInfoResponse, self._PICS_done, send_emsg, EMsg.ClientPICSProductInfoResponse)
-        await self._send_common(send_header, message, send_emsg, resp_holder, job_id)
+        await self._router.send_common(send_header, message, send_emsg, resp_holder, job_id)
 
         data = await resp_holder.get_future()
         return [ProtoResult(x.eresult, x.error_message, y) for (x,y) in data]
@@ -344,7 +311,7 @@ class SteamModelMessages:
         message = CCommunity_GetAppRichPresenceLocalization_Request(app_id, language)
 
         try:
-            header, resp = await self._send_recv_service_message(message, CCommunity_GetAppRichPresenceLocalization_Response, GET_APP_RICH_PRESENCE)
+            header, resp = await self._router.send_recv_service_message(message, CCommunity_GetAppRichPresenceLocalization_Response, GET_APP_RICH_PRESENCE)
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
@@ -358,7 +325,7 @@ class SteamModelMessages:
         message.versions.append(message_inside)
 
         try:
-            header, resp = await self._send_recv_service_message(message, CCloudConfigStore_Download_Response, CLOUD_CONFIG_DOWNLOAD)
+            header, resp = await self._router.send_recv_service_message(message, CCloudConfigStore_Download_Response, CLOUD_CONFIG_DOWNLOAD)
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
@@ -369,7 +336,7 @@ class SteamModelMessages:
         message = CPlayer_GetLastPlayedTimes_Request(0)
 
         try:
-            header, resp = await self._send_recv_service_message(message, CPlayer_GetLastPlayedTimes_Response, GET_LAST_PLAYED_TIMES)
+            header, resp = await self._router.send_recv_service_message(message, CPlayer_GetLastPlayedTimes_Response, GET_LAST_PLAYED_TIMES)
             return ProtoResult(header.eresult, header.error_message, resp)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
