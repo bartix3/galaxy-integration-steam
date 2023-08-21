@@ -309,7 +309,10 @@ class PluginModel:
     #can't really proactively do the acheivements because they depend on games being done and it's not worth the hassle.
 
     async def get_unlocked_achievements(self, game_id: int) -> List[Achievement]:
-        result = await self._client_messages.GetUserStats(game_id)
+        if not self._local_persistent_cache.has_steam_id():
+            raise AuthenticationRequired()
+
+        result = await self._client_messages.GetUserStats(self._local_persistent_cache.get_steam_id(), game_id)
         if result.eresult != EResult.OK:
             return []
 
@@ -333,13 +336,13 @@ class PluginModel:
             logger.debug(f"schema didn't contain game id {game_id}; received stats: {data.stats}, received achievements: {data.achievement_blocks}")
             return []
 
-        schema = schema[str(game_id)]  # short cut
+        game_data = schema[str(game_id)]
 
         achievements_unlocked: List[Achievement] = []
         for achievement_block in data.achievement_blocks:
             block_id = str(achievement_block.achievement_id)
             try:
-                stats_block_schema = schema['stats'][block_id]
+                stats_block_schema = game_data['stats'][block_id]
             except KeyError:
                 logger.warning("No stat schema for block %s for game: %s", block_id, game_id)
                 continue
@@ -375,7 +378,11 @@ class PluginModel:
 
     #region User-defined settings applied to their games
     async def begin_get_tags_hidden_etc(self) -> Dict[str, Set[int]]:
-        result = await self._client_messages.ConfigStore_Download()
+        if not self._local_persistent_cache.has_steam_id():
+            raise AuthenticationRequired()
+
+        steam_id = self._local_persistent_cache.get_steam_id()
+        result = await self._client_messages.ConfigStore_Download(steam_id)
         tag_lookup: Dict[str, Set[int]] = {}
 
         response: CCloudConfigStore_Download_Response = result.body

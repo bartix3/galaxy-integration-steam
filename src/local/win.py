@@ -1,3 +1,7 @@
+import sys
+
+assert sys.platform == 'win32' # so mypy plays nice on MacOS
+
 import os
 import shlex
 import winreg
@@ -11,6 +15,7 @@ from galaxy.registry_monitor import RegistryMonitor
 
 from .base import BaseClient
 from .shared import create_games_dict
+
 
 log = getLogger(__name__)
 

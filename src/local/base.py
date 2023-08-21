@@ -9,7 +9,7 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Iterable, Optional
 
-from attr import dataclass
+from dataclasses import dataclass
 from galaxy.api.types import LocalGame
 
 from .shared import load_vdf
@@ -97,12 +97,17 @@ class BaseClient(ABC):
             # yield configuration_folder # default location
             config_path = os.path.join(configuration_folder, "steamapps", "libraryfolders.vdf")
             log.info("Finding library folders from: " + config_path)
+            #config: Dict[str, Any]
             with load_vdf(config_path) as config:
-                for library_folder in config["LibraryFolders"].values():
-                    with suppress(TypeError):
-                        library_folder = library_folder["path"]
-                    if type(library_folder) is str:
-                        yield library_folder
+                if "LibraryFolders" in config and type(config["LibraryFolders"]) is dict:
+                    for library_folder in config["LibraryFolders"].values():
+                        with suppress(TypeError):
+                            library_folder = library_folder["path"]
+                        if type(library_folder) is str:
+                            yield library_folder
+                else:
+                    log.warning("vdf file does not contain library folders or is not of proper format")
+                    raise StopIteration()
 
     def manifests(self) -> Iterable[Manifest]:
         for library_folder in self._get_library_folders():

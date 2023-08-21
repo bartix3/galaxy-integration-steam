@@ -1,10 +1,15 @@
+import sys
+
+assert sys.platform == 'darwin'  # so mypy plays nice.
+
 import os
 from logging import getLogger
 from typing import Dict, Iterable, List
 
-from AppKit import NSWorkspace
-from CoreServices.LaunchServices import LSCopyDefaultHandlerForURLScheme
-from file_read_backwards import FileReadBackwards
+
+from AppKit import NSWorkspace  # type: ignore
+from CoreServices.LaunchServices import LSCopyDefaultHandlerForURLScheme  # type: ignore
+from file_read_backwards import FileReadBackwards  # type: ignore
 from galaxy.api.types import LocalGame
 from galaxy.api.consts import LocalGameState
 

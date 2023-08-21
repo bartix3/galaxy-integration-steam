@@ -2,7 +2,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from logging import getLogger
 from platform import system
-from typing import Any, Dict
+from typing import Any, Dict, Generator
 
 import vdf
 from galaxy.api.consts import LocalGameState
@@ -28,7 +28,7 @@ class CaseInsensitiveDict(dict):
         return super().__getitem__(key.lower())
 
 @contextmanager
-def load_vdf(path: str) -> Dict[str, Any]:
+def load_vdf(path: str) -> Generator[Dict[str, Any], None, None]:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             yield vdf.load(f, mapper=CaseInsensitiveDict)

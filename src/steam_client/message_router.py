@@ -5,17 +5,18 @@ Contains MessageRouter, a class designed to take messages in and return their re
 """
 
 import asyncio
-import datetime
-import ipaddress
 from itertools import count
 import logging
 import struct
-from traceback import format_exception
 import traceback
 
-from typing import Dict, Iterator, Optional, Tuple, Type, TypeVar, cast
+from typing import Dict, Iterator, Optional, Tuple, Type, TypeVar
 
 from betterproto import Message
+from datetime import timezone as TimeZone
+from datetime import datetime as DateTime
+from ipaddress import IPv4Address
+
 from galaxy.api.errors import (AccessDenied, AuthenticationRequired, BackendError, BackendNotAvailable,
                                BackendTimeout, InvalidCredentials, NetworkError, UnknownBackendResponse)
 from websockets.client import WebSocketClientProtocol
@@ -34,18 +35,26 @@ from .websocket_list import WebSocketList
 logger = logging.getLogger(__name__)
 LOG_SENSITIVE_DATA = False
 
-DateTime = datetime.datetime
-
 class MessageRouter:
     _PROTO_MASK = 0x80000000
     _ACCOUNT_ID_MASK = 0x0110000100000000
-    _IP_OBFUSCATION_MASK = 0x606573A4
     _MSG_PROTOCOL_VERSION = 65580
     _MSG_CLIENT_PACKAGE_VERSION = 1561159470
+    _IP_OBFUSCATION_MASK = 0x606573A4
 
     _RECEIVE_DATA_TIMEOUT_SECONDS = 5
     _PROTO_MASK = 0x80000000
 
+    _DATETIME_JAN_1_2005 = DateTime(2005, 1, 1, tzinfo=TimeZone.utc)
+    
+    _BOX_ID_MASK = 0x3FF
+    _PROCESS_ID_MASK = 0xf
+    _DATETIME_MASK = 0x3FFFFFFF
+    _ITERATOR_MAX = 0x100000
+
+    _PROCESS_ID_WIDTH = 4
+    _DATETIME_WIDTH = 30
+    _ITERATOR_WIDTH = 20
 
     def __init__(self, persistent_cache: LocalPersistentCache, box_id: int = 0, process_id: int = 0) -> None:
         self._future_lookup: Dict[int, AwaitableResponse] = {}
@@ -154,10 +163,7 @@ class MessageRouter:
             await asyncio.sleep(0.01)  # allow other tasks to run.
         
         # Only reach this point when shutting down this instance. allow any background tasks to complete. 
-        # However, some tasks may be waiting on future messages that will never come, so this could wait forever. 
-        # It is recommended to wrap the run cleanup in a timeout and then cancel it so all tasks are cancelled.
-        self.gathering_tasks_event.set()
-        await asyncio.gather(self._task_list, return_exceptions=True)
+        await self._unsolicited_handler.perform_cleanup()
 
     async def _process_packet(self, packet: Data, received_timestamp: DateTime, containing_multi: Optional[MultiHandler]):
         if (isinstance(packet, str)):
@@ -278,7 +284,7 @@ class MessageRouter:
             process_id &= cls._PROCESS_ID_MASK # cap at 4 bits.
             value = (value + process_id) << cls._DATETIME_WIDTH 
         #handle date time
-        utc_now = DateTime.now(datetime.timezone.utc)
+        utc_now = DateTime.now(TimeZone.utc)
         delta_time = int((utc_now - cls._DATETIME_JAN_1_2005).total_seconds()) # Total seconds since jan 1 2005 as an integer. Used by job id, but idk why that is the arbitrary date we use.
         # Limit to 30 bits because we have a fixed 64-bit integer for job id and that's how many characters are allotted. wont be relevant until ~2060 +/- 5 years (didn't do the math)
         relative_start_time : int = delta_time & cls._DATETIME_MASK 
@@ -294,6 +300,11 @@ class MessageRouter:
         value += iteration
 
         return value
+
+    def generate_cached_message(self, steam_id: int, msg: Message, emsg: EMsg) -> bytes:
+        header = self.generate_header(steam_id)
+        return self._generate_message(header, msg, emsg)
+
 
     # header and message generates are always called back to back. feel free to merge thes into one.
     def generate_header(self, steam_id: Optional[int], job_id: Optional[int] = None, job_name: Optional[str] = None) -> CMsgProtoBufHeader:
@@ -323,7 +334,7 @@ class MessageRouter:
         msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(head))
         return msg_info + head + body
 
-    async def send_client_no_wait(self, msg: Message, emsg: EMsg, steam_id: Optional[int]):
+    async def send_client_no_wait(self, steam_id: int, msg: Message, emsg: EMsg):
         """Send a client message along the websocket. Do not expect a response.
 
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.
@@ -336,6 +347,10 @@ class MessageRouter:
         else:
             logger.info("[Out] %s (%dB)", repr(emsg), len(data))
         
+        socket = await self.get_socket()
+        await socket.send(data)
+
+    async def send_cached_message(self, data: bytes):
         socket = await self.get_socket()
         await socket.send(data)
 
@@ -356,18 +371,17 @@ class MessageRouter:
             await socket.send(data)
         except Exception as e:
             logger.exception(f"Unexpected error sending the data: {e}", exc_info=True)
-            response_holder.get_future().cancel()
+            response_holder.get_future().set_exception(e)
             self._future_lookup.pop(unique_identifier)
-            raise
 
     U = TypeVar("U", bound= Message)
-    async def send_recv_service_message(self, msg: Message, response_type: Type[U], send_recv_name: str) -> Tuple[CMsgProtoBufHeader, U]:
-        emsg = EMsg.ServiceMethodCallFromClientNonAuthed if self.confirmed_steam_id is None else EMsg.ServiceMethodCallFromClient
+    async def send_recv_service_message(self, steam_id: Optional[int], msg: Message, response_type: Type[U], send_recv_name: str) -> Tuple[CMsgProtoBufHeader, U]:
+        emsg = EMsg.ServiceMethodCallFromClientNonAuthed if steam_id is None else EMsg.ServiceMethodCallFromClient
         job_id = self.get_next_job_id()
-        header = self.generate_header(job_id, send_recv_name)
+        header = self.generate_header(steam_id, job_id, send_recv_name)
         resp_holder = AwaitableJobNameResponse.create_default(response_type, send_recv_name)
 
-        await self._send_common(header, msg, emsg, resp_holder, job_id)
+        await self.send_common(header, msg, emsg, resp_holder, job_id)
         try:
             return await resp_holder.get_future()
         except Exception as e:
@@ -376,12 +390,12 @@ class MessageRouter:
             raise
 
     V = TypeVar("V", bound= Message)
-    async def send_recv_client_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
+    async def send_recv_client_message(self, steam_id: int, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V]) -> Tuple[CMsgProtoBufHeader, V]:
 
-        header = self.generate_header(override_steam_id=override_steam_id)
+        header = self.generate_header(steam_id)
         unique_identifier = expected_return_format.value * -1
         resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
-        await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
+        await self.send_common(header, msg, send_format, resp_holder, unique_identifier)
 
         try:
             return await resp_holder.get_future()
@@ -391,12 +405,12 @@ class MessageRouter:
             raise
 
     W = TypeVar("W", bound= Message)
-    async def send_recv_client_multiple_message(self, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[V], override_steam_id: Optional[int] = None) -> Tuple[CMsgProtoBufHeader, V]:
+    async def send_recv_client_multiple_message(self, steam_id: int, msg: Message, send_format: EMsg, expected_return_format: EMsg, response_type: Type[W]) -> Tuple[CMsgProtoBufHeader, W]:
 
-        header = self.generate_header(override_steam_id=override_steam_id)
+        header = self.generate_header(steam_id)
         unique_identifier = expected_return_format.value * -1
         resp_holder = AwaitableEMessageResponse.create_default(response_type, send_format, expected_return_format)
-        await self._send_common(header, msg, send_format, resp_holder, unique_identifier, override_steam_id)
+        await self.send_common(header, msg, send_format, resp_holder, unique_identifier)
 
         try:
             return await resp_holder.get_future()
@@ -405,13 +419,13 @@ class MessageRouter:
             self._future_lookup.pop(unique_identifier)
             raise
 
-    # old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow.
-    async def _get_obfuscated_private_ip(self) -> int:
-        socket = await self.get_socket()
+        # old auth flow. Still necessary for remaining logged in and confirming after doing the new auth flow.
+    async def get_obfuscated_private_ip(self) -> int:
+        socket : WebSocketClientProtocol = await self.get_socket()
         logger.info('Websocket state is: %s' % socket.state.name)
         await socket.ensure_open()
         host, _ = socket.local_address
-        ip = int(ipaddress.IPv4Address(host))
+        ip = int(IPv4Address(host))
         obfuscated_ip = ip ^ self._IP_OBFUSCATION_MASK
         logger.debug(f"Local obfuscated IP: {obfuscated_ip}")
         return obfuscated_ip

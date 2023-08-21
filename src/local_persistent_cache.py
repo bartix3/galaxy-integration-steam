@@ -80,3 +80,9 @@ class LocalPersistentCache:
 
     def get_games(self) -> List[Game]:
         raise NotImplementedError()
+
+    def has_steam_id(self) -> bool:
+        raise NotImplementedError()
+
+    def get_steam_id(self) -> int:
+        raise NotImplementedError()

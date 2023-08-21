@@ -169,3 +169,6 @@ class NonstandardMessageHandler():
         """
         pass
     #endregion
+
+    async def perform_cleanup(self):
+        raise NotImplementedError()
