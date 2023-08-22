@@ -67,6 +67,7 @@ class MessageRouter:
         self._job_id_iterator: Iterator[int] = count(1)
         self._session_id: Optional[int] = None
         self._socket_ready_event: GenericEvent[WebSocketClientProtocol] = GenericEvent()
+        self._run_ready_event: asyncio.Event = asyncio.Event()
 
     async def get_socket(self) -> WebSocketClientProtocol:
         return await self._socket_ready_event.wait()
@@ -127,7 +128,7 @@ class MessageRouter:
                             " Recovering as if the connection was closed.")
                     else:
                         logger.error("Received unrecoverable error from receive task loop: " + 
-                            traceback.format_exception(type(exception), exception, exception.__traceback__))
+                            "".join(traceback.format_exception(type(exception), exception, exception.__traceback__)))
                         recoverable = False
                         exception_to_bubble_up = exception
 
@@ -334,7 +335,7 @@ class MessageRouter:
         msg_info = struct.pack("<2I", emsg | self._PROTO_MASK, len(head))
         return msg_info + head + body
 
-    async def send_client_no_wait(self, steam_id: int, msg: Message, emsg: EMsg):
+    async def send_client_no_wait(self, steam_id: Optional[int], msg: Message, emsg: EMsg):
         """Send a client message along the websocket. Do not expect a response.
 
         If a response does occur, treat it as unsolicited. Immediately finish the call after sending.

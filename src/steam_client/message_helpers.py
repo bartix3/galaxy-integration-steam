@@ -31,7 +31,7 @@ _DATETIME_WIDTH = 30
 _ITERATOR_WIDTH = 20
 
 def generate_job_id(iterator: Iterator[int]) -> int:
-    pass
+    raise NotImplementedError()
 
 @dataclass
 class OwnedTokenTuple():
@@ -87,15 +87,11 @@ class AwaitableResponse(ABC):
         pass
 
 T = TypeVar("T", bound=betterproto.Message)
-class AwaitableJobNameResponse(AwaitableResponse, Generic[T]):
+class AwaitableUMResponse(AwaitableResponse, ABC, Generic[T]):
     def __init__(self, ctor: Callable[[bytes], T], job_name: str) -> None:
         super().__init__()
         self._ctor = ctor
         self._job_name = job_name
-
-    @staticmethod
-    def create_default(type_data: Type[T], job_name: str) -> AwaitableJobNameResponse[T]:
-        return AwaitableJobNameResponse(lambda x: type_data().parse(x), job_name)
 
     @property
     def job_name(self):
@@ -107,6 +103,38 @@ class AwaitableJobNameResponse(AwaitableResponse, Generic[T]):
         else:
             return (False, f"Received a service message, but not of the expected name. Got {job_name}, but we were expecting {self._job_name}. Treating as an unsolicited message")
 
+
+U = TypeVar("U", bound=betterproto.Message)
+class AwaitableClientResponse(AwaitableResponse, ABC, Generic[U]):
+    def __init__(self, ctor: Callable[[bytes], U], send_type: EMsg, response_type: EMsg) -> None:
+        super().__init__()
+        self._ctor = ctor
+        self._send_type = send_type
+        self._response_type = response_type
+
+    @property
+    def send_type(self):
+        return self._send_type
+
+    @property
+    def response_type(self):
+        return self._response_type
+
+    def matches_identifier_with_log_message(self, response_type : EMsg, _: str) -> Tuple[bool, str]:
+        if self._response_type == response_type:
+            return (True, "")
+        else:
+            return (False, f"Message has return type {response_type.name}, but we were expecting {self._response_type.name}. Treating as an unsolicited message")
+
+
+class AwaitableJobNameResponse(AwaitableUMResponse[T]):
+    def __init__(self, ctor: Callable[[bytes], T], job_name: str) -> None:
+        super().__init__(ctor, job_name)
+
+    @staticmethod
+    def create_default(type_data: Type[T], job_name: str) -> AwaitableJobNameResponse[T]:
+        return AwaitableJobNameResponse(lambda x: type_data().parse(x), job_name)
+
     def generate_response_check_complete(self, header: CMsgProtoBufHeader, data: bytes) -> bool:
         resp = self._ctor(data)
         super()._future.set_result((header, resp))
@@ -116,24 +144,13 @@ class AwaitableJobNameResponse(AwaitableResponse, Generic[T]):
         return cast('Future[Tuple[CMsgProtoBufHeader,T]]', super()._future)
 
 
-U = TypeVar("U", bound=betterproto.Message)
-class AwaitableEMessageResponse(AwaitableResponse, Generic[U]):
+class AwaitableEMessageResponse(AwaitableClientResponse[U]):
     def __init__(self, ctor: Callable[[bytes], U], send_type: EMsg, response_type: EMsg) -> None:
-        super().__init__()
-        self._ctor = ctor
-        self._send_type = send_type
-        self._response_type = response_type
+        super().__init__(ctor, send_type, response_type)
 
     @staticmethod
     def create_default(type_data: Type[U], send_type: EMsg, response_type: EMsg) -> AwaitableEMessageResponse[U]:
         return AwaitableEMessageResponse(lambda x: type_data().parse(x), send_type, response_type)
-
-    def matches_identifier_with_log_message(self, response_type : EMsg, _: str) -> Tuple[bool, str]:
-        if self._response_type == response_type:
-            return (True, "")
-        else:
-            return (False, f"Message has return type {response_type.name}, but we were expecting {self._response_type.name}. Treating as an unsolicited message")
-
 
     def generate_response_check_complete(self, header: CMsgProtoBufHeader, data: bytes) -> bool:
         resp = self._ctor(data)
@@ -145,13 +162,12 @@ class AwaitableEMessageResponse(AwaitableResponse, Generic[U]):
 
 
 V = TypeVar("V", bound=betterproto.Message)
-class AwaitableJobNameMultipleResponse(AwaitableJobNameResponse[V], Generic[V]):
+class AwaitableJobNameMultipleResponse(AwaitableUMResponse[V]):
 
     def __init__(self, ctor: Callable[[bytes], V], finish_condition: Callable[[V], bool], job_name: str) -> None:
         super().__init__(ctor, job_name)
         self._predicate = finish_condition
         self._response_list: List[Tuple[CMsgProtoBufHeader, V]] = []
-
 
     @staticmethod
     def create_default(type_data: Type[V], finish_condition : Callable[[V], bool], job_name: str) -> AwaitableJobNameMultipleResponse[V]:
@@ -169,8 +185,9 @@ class AwaitableJobNameMultipleResponse(AwaitableJobNameResponse[V], Generic[V]):
     def get_future(self) -> 'Future[List[Tuple[CMsgProtoBufHeader,V]]]':
         return cast('Future[List[Tuple[CMsgProtoBufHeader,V]]]', super()._future)
 
+
 X = TypeVar("X", bound=betterproto.Message)
-class AwaitableEMessageMultipleResponse(AwaitableEMessageResponse[X], Generic[X]):
+class AwaitableEMessageMultipleResponse(AwaitableClientResponse[X]):
     def __init__(self, ctor: Callable[[bytes], X], finish_condition: Callable[[X], bool], send_type: EMsg, response_type: EMsg) -> None:
         super().__init__(ctor, send_type, response_type)
         self._predicate = finish_condition

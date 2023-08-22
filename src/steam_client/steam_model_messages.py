@@ -104,7 +104,7 @@ class SteamModelMessages:
     async def SendHello(self):
         message = CMsgClientHello(self._MSG_PROTOCOL_VERSION)
         logger.info("Sending hello")
-        await self._router.send_client_no_wait(message, EMsg.ClientHello, None)
+        await self._router.send_client_no_wait(None, message, EMsg.ClientHello)
 
     # Standard Request/Response style messages. They aren't synchronous by nature of websocket communication, but we can write our code to closely mimic that behavior.
 
@@ -218,7 +218,7 @@ class SteamModelMessages:
         message = CMsgClientLogOff()
         logger.info("Sending log off message")
         try:
-            await self._router.send_client_no_wait(steam_id or 0, message, EMsg.ClientLogOff)
+            await self._router.send_client_no_wait(steam_id, message, EMsg.ClientLogOff)
         except Exception as e:
             logger.error(f"Unable to send logoff message {repr(e)}")
 

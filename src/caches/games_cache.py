@@ -28,3 +28,6 @@ class GamesCache(CacheBase):
 
     def populate_from_cache(self, cache_data: Dict[str, Any]):
         raise NotImplementedError()
+
+    def prepare_for_package_update(self):
+        raise NotImplementedError()

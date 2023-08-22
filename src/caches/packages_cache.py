@@ -35,7 +35,7 @@ class PackageCache(CacheBase):
         # That said, it should be memoized to increase performance during runtime. 
         self._app_package_reverse_lookup: Dict[int, Set[PackageInfo]] = {}
         #packages not ready, being processed. 
-        self.packages_processing_event: Event = Event
+        self.packages_processing_event: Event = Event()
         #packages are not ready but in the process of being updated. 
         self.packages_updated_event: GenericEvent[PackageDataUpdateEvent] = GenericEvent[PackageDataUpdateEvent]()
         #packages are ready. Can be used outside of get games checks to see if packages are ready 

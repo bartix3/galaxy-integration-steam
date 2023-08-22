@@ -73,7 +73,7 @@ class SteamPlugin(Plugin):
     def __init__(self, reader, writer, token):
         super().__init__(Platform.Steam, __version__, reader, writer, token)
         self._maybe_model: Optional[PluginModel] = None
-        self._maybe_view: PluginView = None
+        self._maybe_view: Optional[PluginView] = None
         self._auth_data: Optional[ControllerAuthData] = None
         self._unauthed_username: Optional[str] = None  # username is only used in subsequent auth calls
         self._unauthed_steam_id: Optional[int] = None  # unverified steam id. Once verified, this is stored in the cache.
@@ -82,7 +82,7 @@ class SteamPlugin(Plugin):
         self.handshake_complete_event: asyncio.Event = asyncio.Event()
 
         # local features
-        self._last_launch: Timestamp = 0
+        self._last_launch: Timestamp = Timestamp(0)
         self._update_local_games_task = asyncio.create_task(asyncio.sleep(0))
 
         # local client
@@ -193,6 +193,10 @@ class SteamPlugin(Plugin):
         return await self._attempt_client_login(data_or_error)
 
     async def _handle_confirmation_result(self):
+        if self._two_factor_info is None:
+            logger.exception("Two Factor page returned but the steam id and two factor information are not initialized. This is unexpected")
+            raise UnknownBackendResponse()
+
         authentication_data_or_error = await self._model.check_authentication_status(self._two_factor_info.client_id, self._two_factor_info.request_id, True)
         if isinstance(authentication_data_or_error, ModelAuthPollResult):
             auth_data = cast(ModelAuthPollResult, authentication_data_or_error)

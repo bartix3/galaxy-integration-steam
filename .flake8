@@ -3,5 +3,5 @@ ignore = E501
 exclude =
     .git,
     __pycache__,
-    src/steam_network/protocol/messages,
+    src/steam_client/messages,
     DEPRECATED_*
