@@ -186,6 +186,7 @@ Well, without being too complicated, Steam changed how they do authentication. W
 ## Credits
 
 ### Current Version
+
 This is a fork of https://github.com/FriendsOfGalaxy/galaxy-integration-steam
 
 The new Authorization flow implementation is heavily influenced by SteamKit. https://github.com/SteamRE/SteamKit<br>
