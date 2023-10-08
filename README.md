@@ -40,6 +40,7 @@ This project is in open beta. It is not completely bulletproof, but it has been 
 
 ### Installation
 
+1. Close GOG Galaxy. 
 1. There is a zip file in the releases directory. Download this.
 1. Navigate to where GOG stores the steam plugin. 
    * Windows:
