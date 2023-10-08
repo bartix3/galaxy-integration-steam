@@ -15,7 +15,7 @@ _Table of Contents_
   - [Logging](#logging)
 - [Setup (For Developers)](#setup-for-developers)
   - [Environment Setup (Windows)](#environment-setup-windows)
-  - [Environment Setup (MacOS)](#environment-setup-macos)
+  - [Environment Setup (macOS)](#environment-setup-macos)
 - [Making Changes](#making-changes)
 - [Testing new Builds (non-developers)](#testing-new-builds-non-developers)
   - [Installation (non-dev, TL;DR)](#installation-non-dev-tldr)
@@ -46,7 +46,7 @@ This project is in open beta. It is not completely bulletproof, but it has been 
       ```
       %localappdata%\GOG.com\Galaxy\plugins\installed\steam_ca27391f-2675-49b1-92c0-896d43afa4f8
       ```
-   * MacOS:
+   * macOS:
       ```
       ~/Library/Application Support/GOG.com/Galaxy/plugins/installed/steam_ca27391f-2675-49b1-92c0-896d43afa4f8
       ```
@@ -61,7 +61,7 @@ We tried to kill as many bugs and test as many behaviors as possible, but we are
 <br>Please raise an issue here, and in the comment, attach your logs.
 <br>They can be found here: 
 * Windows:<br>`%programdata%\GOG.com\Galaxy\logs`
-* MacOS:  <br>`/Users/Shared/GOG.com/Galaxy/Logs`
+* macOS:  <br>`/Users/Shared/GOG.com/Galaxy/Logs`
 
 We typically only need the `steam_<numbers and letters>.log` file.
 
@@ -80,7 +80,7 @@ You will need Python 3.7, and at least Python 3.7.9. If on Windows, you need to 
 * Install the dev dependencies:<br>
   `pip install -r requirements/dev.txt`
 
-### Environment Setup (MacOS)
+### Environment Setup (macOS)
 
 * Python 3.7.9 is available as a package at [Python 3.7.9 32-bit][Python379]. However, if you have another version of python installed, it is highly recommended you get `pyenv` and install python 3.7 through there. It's likely to be a newer version of python 3.7. 
   - The easiest way to get pyenv is through `Homebrew`. This can be installed from [Homebrew � The Missing Package Manager for macOS (or Linux)](https://brew.sh/)<br/> 
@@ -94,7 +94,7 @@ You will need Python 3.7, and at least Python 3.7.9. If on Windows, you need to 
   `.venv/Scripts/activate`
 * Install the dev dependencies:<br>
   `pip install -r requirements/dev.txt`
-* NOTE: MacOS requires certifications. We installed certifi, but it typically requires a symlink be added to your certificates, and that's not the case. If you installed the program from the pkg on python's website, it comes bundled with an `Install Certificates.command` that you can run. We have also provided a slimmed-down version of it, but it likely does not have permission to run. 
+* NOTE: macOS requires certifications. We installed certifi, but it typically requires a symlink be added to your certificates, and that's not the case. If you installed the program from the pkg on python's website, it comes bundled with an `Install Certificates.command` that you can run. We have also provided a slimmed-down version of it, but it likely does not have permission to run. 
 	- To User our version:<br/>
 	`chmod +x "Install Certificates.command"`<br/>
 	`./Install Certificates.command` You may need to allow it through gatekeeper. we recommend viewing the script before allowing it if you are uncomfortable with executing our script. It is copied directly from the python 3.7.9 pkg, we just remove the install certifi command (we already did that).
@@ -105,7 +105,7 @@ Once you are set up, you can make whatever changes you need to. There are, howev
 
 Steam uses protobufs for its messages. Please see README_UPDATE_PROTOBUF_FILES.md in the protobuf_files directory for more information on how these work and how to update them.
 
-There are several commands that make your life easier. These are done via the `invoke` python module. To do so, make sure your virtual environment is active (`.venv\Scripts\activate.ps1` on Windows via cmd/powershell, `.venv/Scripts/activate` on MacOS via Terminal) and then the following commands will be available to you:
+There are several commands that make your life easier. These are done via the `invoke` python module. To do so, make sure your virtual environment is active (`.venv\Scripts\activate.ps1` on Windows via cmd/powershell, `.venv/Scripts/activate` on macOS via Terminal) and then the following commands will be available to you:
 
 To build your code, run `inv build`<br/>
 To run the defined python tests on your code, run `inv test`<br/>
@@ -130,11 +130,11 @@ Please do the following:
 	`python -m venv .venv`
 	- IF you have multiple python versions installed and are on Windows (assumes you have `py` as well)<br>
 	`py -3.7 -m venv .venv`
-	- If you are on MacOS, you will need to specify which python you are using. Please consult StackOverflow (we're Windows developers, sorry!).
+	- If you are on macOS, you will need to specify which python you are using. Please consult StackOverflow (we're Windows developers, sorry!).
 * Activate the virtual env 
   - Windows, Powershell:<br>
   `.venv\Scripts\activate`
-  - MacOS, terminal:<br>
+  - macOS, terminal:<br>
   `.venv/Scripts/activate`
 * Use Pip to get the python tools we need to install the plugin.
 <br>These will only be applied to the `.venv` virtual environment you created earlier:<br>
@@ -158,9 +158,9 @@ pip install -r requirements/install.txt
 inv install
 ```
 
-<b>MacOS</b> (assumes your shell is bash, which is the default. if you are good enough to change that, you can figure out how to run these)
+<b>macOS</b> (assumes your shell is bash, which is the default. if you are good enough to change that, you can figure out how to run these)
 ```
-echo You must have installed python 3.7.9 (MacOS). If not, the rest of this won't work.
+echo You must have installed python 3.7.9 (macOS). If not, the rest of this won't work.
 py -3.7 -m venv .venv
 echo If the previous command did not work, you do not have py installed or py is not in your PATH.
 echo If you only have python 3.7.9, run the next command.
