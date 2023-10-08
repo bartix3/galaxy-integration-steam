@@ -2,6 +2,32 @@
 
 GOG Galaxy 2.0 Community integration for Steam.
 
+_Table of Contents_
+
+<!-- Generated with [DocToc](https://github.com/thlorenz/doctoc) -->
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+
+- [Open Beta](#open-beta)
+  - [Known Issues](#known-issues)
+  - [Installation](#installation)
+  - [Logging](#logging)
+- [Setup (For Developers)](#setup-for-developers)
+  - [Environment Setup (Windows)](#environment-setup-windows)
+  - [Environment Setup (MacOS)](#environment-setup-macos)
+- [Making Changes](#making-changes)
+- [Testing new Builds (non-developers)](#testing-new-builds-non-developers)
+  - [Installation (non-dev, TL;DR)](#installation-non-dev-tldr)
+  - [Install Error fixes](#install-error-fixes)
+- [Why this fork?](#why-this-fork)
+- [Credits](#credits)
+  - [Current Version](#current-version)
+  - [The names of individual developers will appear here, soon(ish). Any thanks can be directed there](#the-names-of-individual-developers-will-appear-here-soonish-any-thanks-can-be-directed-there)
+  - [Original Version](#original-version)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## Open Beta
 
 This project is in open beta. It is not completely bulletproof, but it has been extensively tested. We are hoping that crowdsourcing the error checking will help find anything we may have missed.
