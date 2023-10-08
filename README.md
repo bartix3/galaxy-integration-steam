@@ -42,7 +42,7 @@ This project is in open beta. It is not completely bulletproof, but it has been 
 
 1. Close GOG Galaxy. 
 1. Download the `windows.zip` file of the latest version in [the Releases page](https://github.com/ABaumher/galaxy-integration-steam/releases).
-1. Navigate to where GOG stores the steam plugin. 
+1. Navigate to GOG Galaxy steam plugin directory: 
    * Windows:
       ```
       %localappdata%\GOG.com\Galaxy\plugins\installed\steam_ca27391f-2675-49b1-92c0-896d43afa4f8
@@ -51,8 +51,8 @@ This project is in open beta. It is not completely bulletproof, but it has been 
       ```
       ~/Library/Application Support/GOG.com/Galaxy/plugins/installed/steam_ca27391f-2675-49b1-92c0-896d43afa4f8
       ```
-1. If the file does not exist, create it. If it does, delete everything inside it. 
-1. Extract the zip release so all the contents are in that file. 
+1. If the directory does not exist, create it. If it does, delete all its content. 
+1. Extract the content of `windows.zip` to that directory. 
 1. Start GOG Galaxy. 
 
 ### Logging
