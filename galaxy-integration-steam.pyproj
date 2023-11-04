@@ -27,6 +27,7 @@
     <Content Include=".gitignore" />
     <Content Include="auto-copy-mac.command" />
     <Content Include="auto-copy-windows.bat" />
+    <Content Include="CACHING STRATEGY.txt" />
     <Content Include="current_version.json" />
     <Content Include="galaxy-integration-steam.pyproj" />
     <Content Include="Install Certificates.command" />
@@ -91,10 +92,13 @@
     <Content Include="stubs\galaxy-stubs\__init__.pyi" />
     <Content Include="stubs\vdf-stubs\vdict.pyi" />
     <Content Include="stubs\vdf-stubs\__init__.pyi" />
+    <Content Include="TODO.txt" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="setup.py" />
     <Compile Include="src\data\__init__.py" />
+    <Compile Include="src\plugin_status.py" />
+    <Compile Include="src\steam_client\awaitable_response.py" />
     <Compile Include="src\local\base.py" />
     <Compile Include="src\local\mac.py" />
     <Compile Include="src\local\shared.py" />
@@ -141,10 +145,13 @@
     <Compile Include="src\steam_client\websocket_list.py" />
     <Compile Include="src\data\version.py" />
     <Compile Include="src\__init__.py" />
+    <Compile Include="src_v2\plugin.py" />
+    <Compile Include="src_v2\plugin_status.py" />
     <Compile Include="tasks.py" />
     <Compile Include="task_helper.py" />
   </ItemGroup>
   <ItemGroup>
+    <Folder Include="src_v2\" />
     <Folder Include="src\data\" />
     <Folder Include="DEPRECATED\" />
     <Folder Include="src\steam_client\" />

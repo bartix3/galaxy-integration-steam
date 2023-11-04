@@ -29,6 +29,7 @@ from .message_helpers import AwaitableResponse, AwaitableEMessageMultipleRespons
 from .steam_client_enumerations import EMsg
 from .unsolicited_message_handler import NonstandardMessageHandler
 from ..local_persistent_cache import LocalPersistentCache
+from ..plugin_status import PluginState, PluginStatus
 from ..utils import GenericEvent
 from .websocket_list import WebSocketList
 
@@ -85,7 +86,13 @@ class MessageRouter:
         future_lookup_dict: Dict[int, AwaitableResponse] = {}
         socket_uri: str
         socket : WebSocketClientProtocol
-        socket_uri, socket = await self._websocket_list.connect_to_best_available(self._persistent_cache.get_cell_id())
+        try:
+            socket_uri, socket = await self._websocket_list.connect_to_best_available(self._persistent_cache.get_cell_id())
+            PluginStatus.update_plugin_state(PluginState.UNAUTHENTICATED)  # a successful connection skips over disconnected. 
+        except NetworkError as e:  #can fail if we try 5 times through the entire server list and none succeed. 
+            PluginStatus.set_critical_error(e)
+            raise e
+
         self._socket_ready_event.set(socket)
         queue: asyncio.Queue[MessageWithTimestamp] = asyncio.Queue()
 

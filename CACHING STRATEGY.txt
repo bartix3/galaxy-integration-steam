@@ -1,0 +1,6 @@
+We're going to do optimistic caching because it's far better for large libraries.
+
+We will not store licenses because that's not really useful. We will, however, store a tuple of owner id and package id. this essentially strips down the license to useful info.
+	If a license owner updates, it does not affect the package data - it just swaps between owned and subscribed
+
+We will cache an entire package based on what we need from it - a list of apps being most notable. We're caching all apps included in a package because it'll let us 

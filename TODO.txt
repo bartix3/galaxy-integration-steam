@@ -1,0 +1,10 @@
+Structure Changes: 
+
+remove process task loop and queue. For every message we receive, create a task. 
+	This means errors may be swallowed - the multi messages gather all their tasks and log any errors, but will not know if this is breaking.
+	Raw messages (aka ones not wrapped in a multi) will be handled as if they are a single, multi-wrapped message. 
+	It is up to the implementer to catch these errors
+		If it is an error that does not fundimentally alter the program's behavior, letting it pass to the multi's task gather is probably ok. You may want to log it first though for context if possible.
+		If not, these errors should update the "Program State" with the type of error that's applicable.
+
+Finish implementing "Program State" - does not update after auth succeeds, and does not reset down when auth is lost or the connection drops. If connection drops after authentication, may need a state for still authenticated but disconnected. Not sure if the user remains authenticated in such cases. Will require further testing.

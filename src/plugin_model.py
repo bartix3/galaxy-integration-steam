@@ -2,8 +2,7 @@ import asyncio
 import json
 import logging
 from asyncio import Task
-from typing import (Any, AsyncGenerator, Dict, Iterable, List, Optional, Set,
-                    Union, cast)
+from typing import (Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Union, cast)
 
 import vdf
 from galaxy.api.errors import (AccessDenied, AuthenticationRequired,
@@ -24,8 +23,7 @@ from .mvc_classes import (AuthErrorCode, ModelAuthClientLoginResult,
                           ModelAuthCredentialData, ModelAuthError,
                           ModelAuthPollError, ModelAuthPollResult,
                           SteamPublicKey)
-from .steam_client.message_helpers import (AwaitableResponse, MessageLostException,
-                                       ProtoResult)
+from .steam_client.message_helpers import (AwaitableResponse, MessageLostException, ProtoResult)
 from .steam_client.messages.service_cloudconfigstore import \
     CCloudConfigStore_Download_Response
 from .steam_client.messages.steammessages_auth import (

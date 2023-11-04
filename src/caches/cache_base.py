@@ -2,12 +2,15 @@ import logging
 
 from abc import ABC, abstractmethod
 from asyncio import Event
-from typing import TypeVar, Dict, Optional, Any, List
+from betterproto import Message
+from typing import Any, Dict, Generic, List, Optional, TypeVar
 
 
 logger = logging.getLogger(__name__)
 
-class CacheBase(ABC):
+TProto = TypeVar("TProto", bound = Message)
+TResult = TypeVar("TResult", ProtoResult[TProto], ProtoResult[List[TProto]])
+class CacheBase(ABC, Generic[T]):
     """Base class for all caches. The generic type is used to determine what information it will return. 
     """
     def __init__(self):
@@ -31,8 +34,8 @@ class CacheBase(ABC):
         return ret_val
 
     #allowed for inherited classes but not public.
-    T = TypeVar("T")
-    def _value_changed(self, original: T, new_value : T) -> bool:
+    U = TypeVar("U")
+    def _value_changed(self, original: U, new_value : U) -> bool:
         """ Checks if a new value does not match the original, and sets _is_modified to true if that's the case. does not set the field.
         
         Available to inheriting classes.

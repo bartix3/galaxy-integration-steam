@@ -23,7 +23,8 @@ Updated package structure and references in this file to match.
 import asyncio
 import logging
 import sys
-import time
+from datetime import datetime as DateTime, timezone as TimeZone
+from time import gmtime
 from typing import (Any, AsyncGenerator, Dict, List, NewType, Optional, Set,
                     Tuple, Union, cast)
 
@@ -47,8 +48,6 @@ from .utils import get_os
 from .data.version import __version__
 
 logger = logging.getLogger(__name__)
-
-Timestamp = NewType("Timestamp", int)
 
 FAMILY_SHARE = "Steam Family Share"
 COOLDOWN_TIME = 5
@@ -75,16 +74,6 @@ class SteamPlugin(Plugin):
         self._unauthed_steam_id: Optional[int] = None  # unverified steam id. Once verified, this is stored in the cache.
         self._use_paranoid_login: bool = False  # stores the paranoid login state if we need to fall back to login page.
         self._two_factor_info: Optional[ModelAuthCredentialData] = None  # current two-factor data. Used to redo 2FA on a failure. Once a poll is successful, this data is removed.
-        self.handshake_complete_event: asyncio.Event = asyncio.Event()
-
-        # local features
-        self._last_launch: Timestamp = 0
-        self._update_local_games_task = asyncio.create_task(asyncio.sleep(0))
-
-        # local client
-        self.local = LocalClient()
-
-        PluginStatus.update_plugin_state(PluginState.ALLOCATED)
 
     @property
     def _model(self) -> PluginModel:
@@ -280,117 +269,7 @@ class SteamPlugin(Plugin):
         """Called when GOG Galaxy Client is shutdown or the plugin is disconnected by the user."""
         await self._model.shutdown()
 
-    #endregion End startup, login, and shutdown.
-    #region owned games and subscriptions
-
-    async def get_owned_games(self) -> List[Game]:
-        return await self._model.get_owned_games()
-
-    async def get_subscriptions(self) -> List[Subscription]:
-        return [Subscription(FAMILY_SHARE, True, None, SubscriptionDiscovery.AUTOMATIC)]  # defaults to you have it, even if it's no games.
-
-    async def prepare_subscription_games_context(self, subscription_names: List[str]) -> None:
-        if FAMILY_SHARE in subscription_names:
-            await self._model.prepare_family_share()
-
-    async def get_subscription_games(self, subscription_name: str, _: None) -> AsyncGenerator[List[SubscriptionGame], None]:
-        if subscription_name != FAMILY_SHARE:
-            raise StopAsyncIteration
-        else:
-            return await self._model.get_family_share_games()
-
-    def subscription_games_import_complete(self):
-        self._model.subscription_games_import_complete()
-
-    #endregion
-
-    #region Achievements
-
-    # as of this writing, there is no way to batch import achievements for multiple games. so this function does not add any functionality and actually bottlenecks the code.
-    # this is therefore unused. Should this ever change, the logic can be optimized by retrieving that info here and then caching it so the get_unlocked_achievements does not do anything.
-    # async def prepare_achievements_context(self, game_ids: List[str]) -> Any:
-
-    #as of this writing, prepare_achievements_context is not overridden and therefore returns None. That result is then passed in here, so the value here is also None.
-    async def get_unlocked_achievements(self, game_id: str, _: None) -> List[Achievement]:
-        """Get the unlocked achievements for the provided game id.
-
-        Games are imported one at a time because a batch import does not exist. Context is therefore None here.
-        """
-        return await self._model.get_unlocked_achievements(int(game_id))
-
-    def achievements_import_complete(self):
-        """Called when get_unlocked_achievements has been called on all game_ids.
-        """
-        self._model.achievements_import_complete()
-    #endregion
-
-    #region Play Time
-    async def prepare_game_times_context(self, game_ids: List[str]) -> None:
-        await self._model.prepare_game_times_context(map(lambda x: int(x), game_ids))
-
-    async def get_game_time(self, game_id: str, _: None) -> GameTime:
-        return await self._model.get_game_time(int(game_id))
-
-    def game_times_import_complete(self):
-        self._model.game_times_import_complete()
-    #endregion
-
-    #region User-defined settings applied to their games
-    async def prepare_game_library_settings_context(self, _: List[str]) -> Dict[str, Set[int]]:
-        return await self._model.begin_get_tags_hidden_etc()
-
-    async def get_game_library_settings(self, game_id: str, tag_lookup: Dict[str, Set[int]]) -> GameLibrarySettings:
-        return await self._model.get_tags_hidden_etc(int(game_id), tag_lookup)
-
-    def game_library_settings_import_complete(self):
-        self._model.tags_hidden_etc_import_complete()
-    #endregion
-
-    #region friend info
-    async def get_friends(self) -> List[UserInfo]:
-        return await self._model.get_friends()
-
-    async def prepare_user_presence_context(self, user_ids: List[str]) -> None:
-        await self._model.prepare_user_presence_context(map(lambda x: int(x), user_ids))
-
-    async def get_user_presence(self, user_id: str, _: None) -> UserPresence:
-        return await self._model.get_user_presence(int(user_id))
-
-    def user_presence_import_complete(self):
-        self._model.user_presence_import_complete()
-    #endregion
-
-    #region Local Game data
-    async def get_local_games(self):
-        return await asyncio.get_running_loop().run_in_executor(None, self.local.latest)
-
-    async def launch_game(self, game_id):
-        self.local.steam_cmd("launch", game_id)
-
-    async def install_game(self, game_id):
-        self.local.steam_cmd("install", game_id)
-
-    async def uninstall_game(self, game_id):
-        self.local.steam_cmd("uninstall", game_id)
-
-    async def prepare_local_size_context(self, game_ids: List[str]) -> Dict[str, Manifest]:
-        return {m.id(): m for m in self.local.manifests()}
-
-    async def get_local_size(self, game_id: str, context: Dict[str, Manifest]) -> Optional[int]:
-        m = context.get(game_id)
-        if m:
-            return m.app_size()
-        else: 
-            return None
-
-    async def shutdown_platform_client(self) -> None:
-        if time.time() < self._last_launch + LAUNCH_DEBOUNCE_TIME:
-            # workaround for quickly closed game (Steam sometimes dumps false positive just after a launch)
-            logger.info("Ignoring shutdown request because game was launched a moment ago")
-            return
-        await self.local.steam_shutdown()
-    #endregion
-
+        
 
 def main():
     """ Program entry point. starts the entire plugin.
