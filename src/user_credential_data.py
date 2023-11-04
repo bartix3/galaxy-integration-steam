@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import NamedTuple, Optional, Dict
+from typing import NamedTuple, Optional, Dict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,12 @@ class UserCredentialData(NamedTuple):
 
     def to_dict(self):
         creds = {}
-        if self.is_valid():
+        if self.is_valid():  #because of this check, all of the following are not null. Casts are used to make mypy happy. 
             creds = {
                 'steam_id': base64.b64encode(str(self.steam_id).encode('utf-8')).decode('utf-8'),
-                'refresh_token': base64.b64encode(self.refresh_token.encode('utf-8')).decode('utf-8'),
-                'account_username': base64.b64encode(self.account_username.encode('utf-8')).decode('utf-8'),
-                'persona_name': base64.b64encode(self.persona_name.encode('utf-8')).decode('utf-8'),
+                'refresh_token': base64.b64encode(cast(str, self.refresh_token).encode('utf-8')).decode('utf-8'), 
+                'account_username': base64.b64encode(cast(str, self.account_username).encode('utf-8')).decode('utf-8'),
+                'persona_name': base64.b64encode(cast(str, self.persona_name).encode('utf-8')).decode('utf-8'),
             }
         return creds
 

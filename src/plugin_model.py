@@ -63,8 +63,8 @@ class PluginModel:
         if self._run_task.done():
             if self._run_task.cancelled():
                 pass
-            elif self._run_task.exception():
-                raise self._run_task.exception()
+            elif self._run_task.exception() is not None:
+                raise cast(BaseException, self._run_task.exception())
             else:
                 logger.exception("Router's run task completed without erroring. This should never occur and is not recoverable")
                 raise UnknownBackendResponse()
@@ -252,12 +252,14 @@ class PluginModel:
         Started by the login process after a successful login, but before returning the results to GOG.
         """
         loop = asyncio.get_running_loop()
+        steam_id = self._local_persistent_cache.get_steam_id()
+
         if not self._local_persistent_cache.package_cache.packages_ready_event.is_set():
             packages_to_handle = await self._local_persistent_cache.package_cache.packages_updated_event.wait()
             #ideally, we'd assume packages kept do not change and check them later. but we're just going to do all of them.
             logger.info("Packages processed: %d Added, %d Removed, and %d (potentially) unchanged")
             responses : List[ProtoResult[CMsgClientPICSProductInfoResponse]] = await self._client_messages.PICSProductInfo_from_packages(
-                set(packages_to_handle.packages_added).update(packages_to_handle.packages_kept))
+                steam_id, set(packages_to_handle.packages_added) | set(packages_to_handle.packages_kept))
             #get apps from the package metadata
             packages = [package for response in responses for package in response.body.packages]
             package_app_lookup: Dict[int, Set[int]] = await loop.run_in_executor(None, self._extract_apps_from_package, packages, logger)
@@ -265,12 +267,12 @@ class PluginModel:
             #get the app metadata
             apps_to_handle = self._local_persistent_cache.package_cache.update_packages_set_apps(package_app_lookup)
         else:
-            apps_to_handle = self._local_persistent_cache.package_cache.packages_ready_event.wait()
+            apps_to_handle = await self._local_persistent_cache.package_cache.packages_ready_event.wait()
 
         self._local_persistent_cache.compare_apps(apps_to_handle)
         #again, ideally we should immediately parse what was added and defer the kept until later but we're just doing all of them.
-        new_or_kept_apps = apps_to_handle.apps_added + apps_to_handle.apps_kept
-        app_responses = await self._client_messages.PICSProductInfo_from_apps(new_or_kept_apps)
+        new_or_kept_apps = apps_to_handle.apps_added | apps_to_handle.apps_kept
+        app_responses = await self._client_messages.PICSProductInfo_from_apps(steam_id, new_or_kept_apps)
         #parse app metadata to get Games and SubsciptionGames
         apps = [app for response in app_responses for app in response.body.apps]
         app_owned_lookup = self._local_persistent_cache.package_cache.get_owned_apps()

@@ -2,7 +2,7 @@
 	"include": [
 		"src"
 	],
-	
+
 	"exclude": [
 		"**/__pycache__",
 		"**/DEPRECATED_*"
@@ -11,11 +11,12 @@
 	"ignore": [
 	],
 
-	"stubPath": "stubs",
-	"venv": "env",
+	"stubPath": "stubs/",
+	"venv": "env/",
 
-	"reportMissingImports": true,
+	"reportMissingImports": false,
 	"reportMissingTypeStubs": true,
+	"reportMissingModuleSource": false,
 
 	"pythonVersion": "3.7",
 	"pythonPlatform": "Windows",

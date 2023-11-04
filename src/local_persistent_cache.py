@@ -62,6 +62,15 @@ class LocalPersistentCache:
     def are_packages_ready(self) -> bool:
         return not self.is_processing_packages() and self.package_cache.checking_or_checked_against_steam_data.is_set()
 
+    def prepare_for_app_data(self):
+        raise NotImplementedError()
+
+    def compare_apps(self, *args):
+        raise NotImplementedError()
+
+    def update_apps(self, *args):
+        raise NotImplementedError()
+
     def are_games_and_subscriptions_ready(self):
         return not self.is_processing_games_and_subscriptions() and self.games_cache.checking_or_checked_against_steam_data.is_set()
 
