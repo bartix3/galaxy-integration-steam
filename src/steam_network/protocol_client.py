@@ -285,7 +285,7 @@ class ProtocolClient:
             self._auth_lost_handler = auth_lost_handler
         elif result == EResult.AccessDenied:
             return UserActionRequired.InvalidAuthData
-        elif result == EResult.Expired
+        elif result == EResult.Expired:
             return UserActionRequired.InvalidAuthData
         else:
             logger.warning(f"authenticate_token failed with code: {result}")
